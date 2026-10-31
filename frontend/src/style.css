@@ -1,0 +1,8 @@
+/**
+ * 全局样式入口（main.js 唯一引入点）
+ * 分层顺序：设计令牌 → Element Plus 变量映射 → 基础与共享样式
+ * 页面内不要再硬编码颜色/间距，统一引用 tokens.css 的语义变量。
+ */
+@import './styles/tokens.css';
+@import './styles/element.css';
+@import './styles/base.css';

@@ -1,0 +1,368 @@
+/**
+ * 基础样式层：reset、排版、滚动条、Markdown 渲染、跨页面共享类
+ * 只做「所有页面都适用」的部分，页面私有样式仍留在各自 SFC 内。
+ */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  line-height: var(--lh-base);
+  color: var(--text-primary);
+  /* 纯色底 + 两层极淡光晕：左上偏品牌蓝、右上偏铜金，避免整屏发平 */
+  background: var(--grad-page-glow), var(--bg-page);
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4 {
+  line-height: var(--lh-tight);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+a {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+/* 滚动条：细、低对比，不抢视觉 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line-200);
+  border-radius: var(--r-pill);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-300);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ============ 共享页面骨架 ============ */
+/* 路由切换时页面组件重新挂载，靠这条动画做统一的入场（不依赖 transition 组件） */
+@keyframes page-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-height: 100%;
+  animation: page-in var(--dur-slow) var(--ease-out) both;
+}
+
+/* 填满内容区：对话、看板等需要占满可用高度的页面 */
+.page--fill {
+  height: calc(100vh - var(--topbar-h) - var(--sp-5) - var(--sp-7));
+  min-height: 460px;
+}
+
+/* 页头：标题 + 副标题 + 右侧操作区 */
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+.page-head__main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+.page-title {
+  position: relative;
+  padding-left: var(--sp-3);
+  font-family: var(--font-serif);
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text-primary);
+}
+/* 页标题前的铜金竖条：学院感的固定记忆点 */
+.page-title::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.16em;
+  bottom: 0.16em;
+  width: 3px;
+  border-radius: var(--r-pill);
+  background: var(--grad-accent);
+}
+.page-sub {
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+.page-head__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+/* 筛选栏：卡片化，与表格同宽 */
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.filter-bar__spacer {
+  flex: 1;
+}
+
+/* 内容面板 */
+.panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-xs);
+  transition: box-shadow var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.panel:hover {
+  box-shadow: var(--shadow-sm);
+  border-color: var(--brand-300);
+}
+.panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-5);
+  border-bottom: 1px solid var(--border);
+}
+.panel__title {
+  font-size: var(--fs-base);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.panel__body {
+  padding: var(--sp-5);
+}
+
+/* KPI 卡组：看板统一节奏 */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--sp-4);
+}
+.kpi {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-5);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-xs);
+  overflow: hidden;
+  transition: box-shadow var(--dur) var(--ease), transform var(--dur) var(--ease-out),
+    border-color var(--dur) var(--ease);
+}
+/* 顶部渐变细条：让 KPI 卡有"版面"而不是纯白方块 */
+.kpi::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: var(--grad-brand);
+  opacity: 0.9;
+}
+.kpi:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--brand-300);
+}
+.kpi__label {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+.kpi__value {
+  font-family: var(--font-serif);
+  font-size: var(--fs-2xl);
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--text-primary);
+}
+.kpi__unit {
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  color: var(--text-secondary);
+  margin-left: var(--sp-1);
+}
+.kpi__hint {
+  font-size: var(--fs-xs);
+  color: var(--text-placeholder);
+}
+
+/* 小节标题 */
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-base);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: var(--sp-3);
+}
+.section-title::before {
+  content: '';
+  width: 3px;
+  height: 14px;
+  border-radius: var(--r-pill);
+  background: var(--color-accent);
+}
+
+/* 空态：统一留白，不用刺眼插画 */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-9) var(--sp-4);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
+/* ============ Markdown 渲染容器 ============ */
+.md-body {
+  line-height: var(--lh-relaxed);
+  word-break: break-word;
+  color: var(--text-primary);
+  font-size: var(--fs-base);
+}
+.md-body h1,
+.md-body h2,
+.md-body h3 {
+  margin: var(--sp-5) 0 var(--sp-2);
+  font-family: var(--font-serif);
+}
+.md-body h1 { font-size: var(--fs-lg); }
+.md-body h2 { font-size: var(--fs-md); }
+.md-body h3 { font-size: var(--fs-base); }
+.md-body p { margin: var(--sp-2) 0; }
+.md-body ul,
+.md-body ol { padding-left: var(--sp-6); margin: var(--sp-2) 0; }
+.md-body li { margin: var(--sp-1) 0; }
+.md-body code {
+  background: var(--bg-subtle);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  color: var(--brand-700);
+}
+.md-body pre {
+  background: #1c2430;
+  color: #d8dee6;
+  padding: var(--sp-4);
+  border-radius: var(--r-md);
+  overflow-x: auto;
+  margin: var(--sp-3) 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+.md-body pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+}
+/* 深色下代码块再压暗一档，与卡片底色拉开层次 */
+html.dark .md-body pre {
+  background: #10171e;
+  color: #cbd5df;
+}
+.md-body blockquote {
+  border-left: 3px solid var(--brand-300);
+  background: var(--brand-50);
+  padding: var(--sp-2) var(--sp-4);
+  margin: var(--sp-3) 0;
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  color: var(--text-secondary);
+}
+.md-body table {
+  border-collapse: collapse;
+  margin: var(--sp-3) 0;
+  width: 100%;
+  font-size: var(--fs-sm);
+}
+.md-body th,
+.md-body td {
+  border: 1px solid var(--border);
+  padding: var(--sp-2) var(--sp-3);
+  text-align: left;
+}
+.md-body th {
+  background: var(--bg-subtle);
+  font-weight: 600;
+}
+.md-body img {
+  max-width: 100%;
+  border-radius: var(--r-sm);
+}
+
+/* AI 生成内容标注：铜金细边，提示"仅供参考" */
+.ai-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-xs);
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+  border: 1px solid rgba(169, 118, 47, 0.28);
+  border-radius: 4px;
+  padding: 1px 6px;
+  margin-top: var(--sp-2);
+  line-height: 1.5;
+}
+
+/* 过渡：页面切换不做花哨动画，只保留极短的淡入 */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

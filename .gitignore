@@ -1,0 +1,42 @@
+# ===== 密钥与敏感配置(绝不提交)=====
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.pytest_cache/
+
+# ===== Node / 前端 =====
+node_modules/
+frontend/dist/
+frontend/node_modules/
+
+# ===== 运行时产物 =====
+backend/static/
+backend/uploads/
+backend/knowledge_base/index/
+*.log
+
+# ===== IDE =====
+.idea/
+.vscode/
+*.swp
+
+# ===== 系统 =====
+.DS_Store
+Thumbs.db
+
+# ===== 本地验证与运行产物(不入库)=====
+管理员.txt
+测试班级.txt
+.screenshots/
+output/

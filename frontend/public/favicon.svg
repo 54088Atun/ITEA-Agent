@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <rect width="64" height="64" rx="12" fill="#0e3350"/>
+  <rect x="4.5" y="4.5" width="55" height="55" rx="9" fill="none" stroke="#a9762f" stroke-opacity="0.75" stroke-width="2"/>
+  <text x="32" y="45" text-anchor="middle"
+        font-family="Georgia, 'Times New Roman', 'Songti SC', serif"
+        font-size="36" font-weight="600" fill="#ffffff">I</text>
+</svg>
