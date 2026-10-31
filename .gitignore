@@ -40,3 +40,7 @@ Thumbs.db
 测试班级.txt
 .screenshots/
 output/
+
+# ===== 本地文档(不入库)=====
+作品提交说明.pdf
+docs/
