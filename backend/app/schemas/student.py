@@ -42,6 +42,7 @@ class ProgressOut(BaseModel):
 class InterviewStartRequest(BaseModel):
     course_id: int
     focus_kp_ids: List[int] = []  # 定向补强知识点,为空则自动从薄弱点选取
+    assignment_id: Optional[int] = None
 
 
 class InterviewRecordOut(BaseModel):
@@ -50,11 +51,18 @@ class InterviewRecordOut(BaseModel):
     question: str
     answer: Optional[str] = None
     score: Optional[int] = None
+    assignment_id: Optional[int] = None
+    score_dimensions: Optional[str] = None
     feedback: Optional[str] = None
+    visibility: Literal["private", "teacher"] = "private"
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class InterviewVisibilityUpdate(BaseModel):
+    visibility: Literal["private", "teacher"]
 
 
 class EnrollOut(BaseModel):

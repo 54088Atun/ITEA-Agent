@@ -1,0 +1,23 @@
+{
+  "version": "2026-11-02",
+  "note": "P2-1 评估基线。offline 在 pytest 中强制校验；live 首次跑分后按实测结果上调。核心指标不允许下降。",
+  "offline": {
+    "cases_total_min": 100,
+    "role_cases_min": 20,
+    "refusal_cases_min": 15,
+    "tool_contract_accuracy_min": 1.0,
+    "permission_accuracy_min": 1.0,
+    "citation_accuracy_min": 1.0,
+    "routing_accuracy_min": 1.0,
+    "refusal_accuracy_min": 1.0,
+    "case_pass_rate_min": 1.0
+  },
+  "live": {
+    "branch_accuracy_min": 0.8,
+    "tool_selection_accuracy_min": 0.6,
+    "task_success_rate_min": 0.75,
+    "faithfulness_rate_min": 0.85,
+    "citation_accuracy_min": 0.7,
+    "refusal_accuracy_min": 0.9
+  }
+}

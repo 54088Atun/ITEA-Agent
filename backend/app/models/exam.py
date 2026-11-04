@@ -1,8 +1,9 @@
-"""试卷与考试作答
+"""试卷、考试作答与考试科目建议
 
 - 试卷归属教师与课程,可面向班级或课程发布
 - 组卷仅支持客观题(单选/多选/判断),提交后自动判分
 - 学生提交记录按 (exam_id, student_id) 唯一,不允许重复提交
+- AI 考试科目/考核项建议只写草稿,教师采纳后才成为考试配置
 """
 from sqlalchemy import (
     Column, BigInteger, String, Text, Integer, DateTime, ForeignKey,
@@ -28,6 +29,24 @@ class Exam(Base):
     total_score = Column(Integer, nullable=False, default=0, server_default="0")
     status = Column(String(20), nullable=False, default="draft", server_default="draft",
                     comment="draft/published/closed")
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class ExamPlanDraft(Base):
+    """AI 考试科目/考核项建议草稿
+
+    payload 为规范化后的建议方案 JSON,含科目、覆盖知识点与考核项
+    (题型/题量/每题分值/难度)；采纳后状态置为 adopted,成为该课程的考试配置，
+    不生成试卷、不自动发布。
+    """
+    __tablename__ = "exam_plan_drafts"
+
+    id = Column(BigIntPK, primary_key=True, autoincrement=True)
+    teacher_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
+    course_id = Column(BigInteger, ForeignKey("courses.id"), nullable=False, index=True)
+    payload = Column(Text, nullable=False, comment="建议方案 JSON")
+    status = Column(String(20), nullable=False, default="draft", server_default="draft",
+                    comment="draft/adopted/discarded")
     created_at = Column(DateTime, server_default=func.now())
 
 

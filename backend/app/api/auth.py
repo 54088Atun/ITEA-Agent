@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.core.security import hash_password, verify_password, create_access_token
 from app.core.deps import get_current_user
+from app.core.log_sanitizer import mask_email
 from app.models.user import User
 from app.schemas.auth import RegisterRequest, LoginRequest, TokenResponse, UserOut
 
@@ -16,7 +17,9 @@ router = APIRouter(prefix="/auth", tags=["认证"])
 
 def _token_response(user: User) -> TokenResponse:
     """统一构造登录响应(兼容旧扁平字段 + 新 user 对象)"""
-    token = create_access_token(user.id, user.role)
+    token = create_access_token(
+        user.id, user.role, getattr(user, "token_version", 0) or 0,
+    )
     return TokenResponse(
         access_token=token,
         role=user.role,
@@ -44,7 +47,7 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
-    logger.info("新用户注册: %s (%s)", user.email, user.role)
+    logger.info("新用户注册: %s (%s)", mask_email(user.email), user.role)
     return _token_response(user)
 
 
@@ -60,7 +63,7 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
     if getattr(user, "status", "active") == "disabled":
         raise HTTPException(status_code=403, detail="账号已被禁用")
 
-    logger.info("用户登录: %s (%s)", user.email, user.role)
+    logger.info("用户登录: %s (%s)", mask_email(user.email), user.role)
     return _token_response(user)
 
 

@@ -29,6 +29,12 @@ class DraftAdoptRequest(BaseModel):
     adopt_all: bool = False
 
 
+class ExamPlanGenerateRequest(BaseModel):
+    """考试科目/考核项建议生成参数"""
+    duration_minutes: int = Field(90, ge=5, le=300)
+    total_score: int = Field(100, ge=10, le=500)
+
+
 class ExamQuestionItem(BaseModel):
     question_id: int
     score: int = Field(5, ge=1, le=100)

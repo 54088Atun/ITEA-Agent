@@ -6,7 +6,10 @@
         <p class="page-sub">掌握度由练习记录与对话复盘累计得出，低于 60 分列为薄弱知识点</p>
       </div>
       <div class="page-head__actions">
-        <el-select v-model="courseId" placeholder="选择课程" style="width: 240px" @change="onCourseChange">
+        <el-select
+          v-model="courseId" placeholder="选择课程" filterable clearable
+          style="width: 240px" @change="onCourseChange"
+        >
           <el-option v-for="c in courses" :key="c.id" :label="c.name" :value="c.id">
             <span>{{ c.name }}</span>
             <el-tag v-if="joinedIds.includes(c.id)" size="small" type="success" style="margin-left: 8px">已加入</el-tag>

@@ -28,9 +28,13 @@ export const courseApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
   },
-  /** 素材列表 → [{id, course_id, type, title, file_path, chunk_count, uploaded_at}] */
+  /** 素材列表 → [{id, ..., parse_status, parse_progress, parse_error}] */
   materials(id) {
     return http.get(`/course/${id}/materials`)
+  },
+  /** 重新解析/复核(解析失败或内容审核未通过时) */
+  retryMaterialParse(id, materialId) {
+    return http.post(`/course/${id}/materials/${materialId}/parse/retry`)
   },
   uploadMaterial(id, type, title, file) {
     const form = new FormData()

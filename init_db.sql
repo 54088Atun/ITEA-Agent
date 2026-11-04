@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS courses (
     syllabus        TEXT,
     semester        VARCHAR(20),
     audit_status    ENUM('pending','approved','rejected') NOT NULL DEFAULT 'approved' COMMENT '审核状态(补充字段,方案 courses 表未定义)',
+    archived_at     DATETIME NULL COMMENT '归档时间',
+    deleted_at      DATETIME NULL COMMENT '软删除时间',
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (teacher_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -111,17 +113,41 @@ CREATE TABLE IF NOT EXISTS practice_records (
     FOREIGN KEY (kp_id) REFERENCES knowledge_points(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- interview_assignments 面试作业表
+CREATE TABLE IF NOT EXISTS interview_assignments (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    teacher_id      BIGINT NOT NULL,
+    class_id        BIGINT NULL,
+    course_id       BIGINT NULL,
+    title           VARCHAR(120) NOT NULL,
+    description     TEXT,
+    due_at          DATETIME NULL,
+    duration_minutes INT NOT NULL DEFAULT 30 COMMENT '面试时长(分钟),1-120',
+    status          VARCHAR(20) NOT NULL DEFAULT 'active' COMMENT 'active/closed',
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_interview_assignment_teacher (teacher_id),
+    INDEX idx_interview_assignment_class (class_id),
+    INDEX idx_interview_assignment_course (course_id),
+    FOREIGN KEY (teacher_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- 10. interview_records 面试记录表
 CREATE TABLE IF NOT EXISTS interview_records (
     id              BIGINT AUTO_INCREMENT PRIMARY KEY,
     profile_id      BIGINT NOT NULL,
+    assignment_id   BIGINT NULL COMMENT '来源面试作业',
     round           INT NOT NULL,
     question        TEXT NOT NULL,
     answer          TEXT,
     score           INT,
+    score_dimensions TEXT NULL COMMENT '四维评分 JSON',
     feedback        TEXT,
+    visibility      VARCHAR(20) NOT NULL DEFAULT 'private' COMMENT 'private/teacher',
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (profile_id) REFERENCES student_profiles(id) ON DELETE CASCADE
+    INDEX idx_interview_record_assignment (assignment_id),
+    FOREIGN KEY (profile_id) REFERENCES student_profiles(id) ON DELETE CASCADE,
+    FOREIGN KEY (assignment_id) REFERENCES interview_assignments(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 11. interaction_logs 交互日志表
@@ -181,3 +207,49 @@ INSERT IGNORE INTO system_config (config_key, config_value, description) VALUES
 ('reflect_max_loops', '2', '反思校验最大循环次数'),
 ('rag_top_k', '5', '知识库检索返回片段数'),
 ('llm_model', '"deepseek-flash"', '当前使用的 LLM 模型');
+
+-- 15. assignments 作业表
+CREATE TABLE IF NOT EXISTS assignments (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    teacher_id      BIGINT NOT NULL,
+    course_id       BIGINT NULL,
+    class_id        BIGINT NULL,
+    title           VARCHAR(120) NOT NULL,
+    kind            VARCHAR(20) NOT NULL DEFAULT 'homework',
+    description     TEXT,
+    reference_answer TEXT,
+    due_at          DATETIME NULL,
+    allow_late      BOOLEAN NOT NULL DEFAULT FALSE COMMENT '截止后是否允许正式补交',
+    status          VARCHAR(20) NOT NULL DEFAULT 'published',
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_assignment_teacher (teacher_id),
+    INDEX idx_assignment_course (course_id),
+    INDEX idx_assignment_class (class_id),
+    FOREIGN KEY (teacher_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 16. submissions 学生提交表
+CREATE TABLE IF NOT EXISTS submissions (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    assignment_id   BIGINT NOT NULL,
+    student_id      BIGINT NOT NULL,
+    content         TEXT NOT NULL,
+    attachment_url  VARCHAR(500),
+    status          VARCHAR(20) NOT NULL DEFAULT 'submitted' COMMENT 'draft/submitted',
+    submitted_at    DATETIME NULL COMMENT '正式提交时间',
+    ai_score        INT,
+    ai_feedback     TEXT,
+    ai_graded_at    DATETIME NULL,
+    score           INT,
+    feedback        TEXT,
+    confirmed_at    DATETIME NULL,
+    confirmed_by    BIGINT NULL,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_submission_student (assignment_id, student_id),
+    INDEX idx_submission_student (student_id),
+    FOREIGN KEY (assignment_id) REFERENCES assignments(id) ON DELETE CASCADE,
+    FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (confirmed_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

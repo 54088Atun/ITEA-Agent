@@ -278,7 +278,7 @@ def test_answers_revealed_after_close(db):
     student = db.get(User, 3)
     start_exam(exam["id"], student, db)
     submit_exam(exam["id"], ExamSubmit(answers={}), student, db)
-    close_exam(exam["id"], db.get(User, 1), db)
+    close_exam(exam["id"], db.get(User, 1), db, confirm=True)
 
     detail = get_my_exam(exam["id"], student, db)
     assert detail["reveal_answers"] is True

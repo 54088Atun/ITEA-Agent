@@ -9,8 +9,27 @@ logger = logging.getLogger(__name__)
 
 AI_TAG = "[AI 辅助参考"
 
-# 合规检查正则:输出中包含超过 30 行的代码块视为疑似代写
-LONG_CODE_PATTERN = re.compile(r"```[\w]*\n(.*?\n){30,}.*?```", re.DOTALL)
+MAX_CODE_BLOCK_LINES = 30
+
+
+def _has_long_code_block(output: str, max_lines: int = MAX_CODE_BLOCK_LINES) -> bool:
+    """线性扫描代码块行数,避免正则灾难性回溯阻塞事件循环"""
+    in_block = False
+    lines = 0
+    for line in output.splitlines():
+        if line.startswith("```"):
+            if in_block:
+                if lines > max_lines:
+                    return True
+                in_block = False
+                lines = 0
+            else:
+                in_block = True
+                lines = 0
+            continue
+        if in_block:
+            lines += 1
+    return in_block and lines > max_lines
 
 
 def _quick_checks(output: str, rag_context: str, require_rag: bool = True) -> list[str]:
@@ -22,7 +41,7 @@ def _quick_checks(output: str, rag_context: str, require_rag: bool = True) -> li
         issues.append("输出缺少 [AI 辅助参考] 标识")
 
     # 2. 合规快检:超长完整代码块疑似代写
-    if LONG_CODE_PATTERN.search(output):
+    if _has_long_code_block(output):
         issues.append("输出包含超长完整代码块(>30行),疑似代写作业代码")
 
     # 3. 幻觉快检:专业内容场景下无知识库支撑

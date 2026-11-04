@@ -1,9 +1,11 @@
 import http from './http'
 
 export const teacherApi = {
-  /** 课程列表(教师看自己的,admin 看全部) → 数组 */
-  courses() {
-    return http.get('/teacher/courses')
+  /** 课程列表(教师看自己的,admin 看全部) → 数组
+   *  params: { keyword?, semester?, audit_status?, lifecycle? }
+   */
+  courses(params = {}) {
+    return http.get('/teacher/courses', { params })
   },
   createCourse(data) {
     // {name, code, syllabus, semester}
@@ -12,8 +14,25 @@ export const teacherApi = {
   course(id) {
     return http.get(`/teacher/courses/${id}`)
   },
+  /** 复制自身课程结构(可覆盖名称/代码/学期) */
+  duplicateCourse(id, data = {}) {
+    return http.post(`/teacher/courses/${id}/duplicate`, data)
+  },
+  /** 可作为模板复制的课程列表(含知识点/资料数量) */
+  courseTemplates() {
+    return http.get('/teacher/course-templates')
+  },
   updateCourse(id, data) {
     return http.put(`/teacher/courses/${id}`, data)
+  },
+  archiveCourse(id) {
+    return http.post(`/teacher/courses/${id}/archive`)
+  },
+  deleteCourse(id) {
+    return http.delete(`/teacher/courses/${id}`)
+  },
+  restoreCourse(id) {
+    return http.post(`/teacher/courses/${id}/restore`)
   },
   /** 上传素材(FormData: course_id/type/title/file) */
   uploadMaterial(courseId, type, title, file) {
@@ -68,23 +87,36 @@ export const teacherApi = {
   closeInterviewAssignment(id) {
     return http.delete(`/teacher/interview-assignments/${id}`)
   },
+  /** 学生授权给当前教师查看的面试记录，可按课程或作业过滤 */
+  interviewRecords(params = {}) {
+    return http.get('/teacher/interview-records', { params })
+  },
   // ---------- 作业 / 考试 ----------
   /** 我发布的作业与考试 → [{id, title, kind, course_id, class_id, due_at, status, submission_count, pending_count}] */
   assignments() {
     return http.get('/teacher/assignments')
   },
   createAssignment(data) {
-    // {title, kind, course_id?, class_id?, description?, reference_answer?, due_days?, publish?}
+    // {title, kind, course_id?, class_id?, description?, reference_answer?, due_days?, allow_late?, publish?}
     return http.post('/teacher/assignments', data)
   },
   assignment(id) {
     return http.get(`/teacher/assignments/${id}`)
   },
-  publishAssignment(id) {
-    return http.post(`/teacher/assignments/${id}/publish`)
+  publishAssignment(id, confirm = false) {
+    return http.post(`/teacher/assignments/${id}/publish`, null, {
+      params: { confirm },
+    })
   },
-  closeAssignment(id) {
-    return http.post(`/teacher/assignments/${id}/close`)
+  closeAssignment(id, confirm = false) {
+    return http.post(`/teacher/assignments/${id}/close`, null, {
+      params: { confirm },
+    })
+  },
+  setAssignmentAllowLate(id, enabled) {
+    return http.post(`/teacher/assignments/${id}/allow-late`, null, {
+      params: { enabled },
+    })
   },
   /** AI 建议批改:只写 ai_* 字段,不生效 */
   aiGradeSubmission(submissionId) {
@@ -97,15 +129,19 @@ export const teacherApi = {
     return http.post(`/teacher/submissions/${submissionId}/confirm`, data)
   },
   // ---------- 课程分享码 ----------
-  createShare(courseId, data = {}) {
+  createShare(courseId, data = {}, confirm = false) {
     // {expires_days?, max_uses?}
-    return http.post(`/teacher/courses/${courseId}/shares`, data)
+    return http.post(`/teacher/courses/${courseId}/shares`, data, {
+      params: { confirm },
+    })
   },
   shares(courseId) {
     return http.get(`/teacher/courses/${courseId}/shares`)
   },
-  revokeShare(shareId) {
-    return http.delete(`/teacher/shares/${shareId}`)
+  revokeShare(shareId, confirm = false) {
+    return http.delete(`/teacher/shares/${shareId}`, {
+      params: { confirm },
+    })
   },
   /** 凭分享码复制课程快照(不含学生数据) */
   importCourse(code) {

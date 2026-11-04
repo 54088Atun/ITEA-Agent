@@ -9,6 +9,7 @@
 - 关闭作业/分享开关后写操作 403
 - 图片上传配额:开关、大小、每日次数
 """
+import asyncio
 import json
 from datetime import datetime
 
@@ -18,6 +19,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+import app.api.student as student_api
 from app.api.assignments import create_assignment
 from app.api.course_share import create_share
 from app.api.me import DeactivateRequest, deactivate_account, export_my_data
@@ -35,6 +37,7 @@ from app.models.profile import MasteryRecord, ReviewPlan, StudentProfile, WrongQ
 from app.models.upload_event import UploadEvent
 from app.models.user import User
 from app.schemas.assignment import AssignmentCreate, CourseShareCreate
+from app.schemas.student import PracticeGenerateRequest
 from app.services.feature_flags import public_features, seed_defaults
 from app.services.quotas import assert_image_upload_allowed
 
@@ -116,6 +119,119 @@ def test_student_timeline_only_own_data(db):
     # 他人数据不可见
     assert "他人作答 B" not in json.dumps(events, ensure_ascii=False)
     assert "他人会话" not in json.dumps(events, ensure_ascii=False)
+
+
+def test_generate_practice_recommendation_references_real_wrong_question(db, monkeypatch):
+    wq = db.query(WrongQuestion).filter_by(profile_id=50).one()
+    wq.created_at = datetime(2026, 1, 2, 3, 4, 5)
+    db.commit()
+    captured = {}
+
+    async def fake_generate(course_name, points, count):
+        captured["points"] = points
+        return [{"question": "针对性练习", "kp_name": points[0], "hint": "复习错题"}]
+
+    monkeypatch.setattr(student_api, "generate_practice", fake_generate)
+    result = asyncio.run(student_api.generate_practice_api(
+        PracticeGenerateRequest(course_id=10), db.get(User, 3), db,
+    ))
+
+    assert result["course_id"] == 10
+    assert result["items"][0]["question"] == "针对性练习"
+    recommendation = result["recommendation"]
+    assert "错题" in recommendation["reason"]
+    assert "等价类划分" in recommendation["reason"]
+    assert recommendation["record_refs"] == [{
+        "type": "wrong_question",
+        "id": wq.id,
+        "title": "等价类划分",
+        "created_at": wq.created_at,
+    }]
+    assert captured["points"] == ["等价类划分"]
+
+
+def test_generate_practice_recommendation_references_real_low_mastery(db, monkeypatch):
+    db.query(ReviewPlan).delete()
+    db.query(WrongQuestion).filter_by(profile_id=50).delete()
+    mastery = db.query(MasteryRecord).filter_by(profile_id=50, kp_id=30).one()
+    mastery.mastery_level = 35
+    mastery.last_assessed_at = datetime(2026, 2, 3, 4, 5, 6)
+    db.commit()
+    captured = {}
+
+    async def fake_generate(course_name, points, count):
+        captured["points"] = points
+        return [{"question": "补强练习", "kp_name": points[0], "hint": "巩固基础"}]
+
+    monkeypatch.setattr(student_api, "generate_practice", fake_generate)
+    result = asyncio.run(student_api.generate_practice_api(
+        PracticeGenerateRequest(course_id=10), db.get(User, 3), db,
+    ))
+
+    recommendation = result["recommendation"]
+    assert "低掌握" in recommendation["reason"]
+    assert "等价类划分" in recommendation["reason"]
+    assert recommendation["record_refs"] == [{
+        "type": "mastery",
+        "id": mastery.id,
+        "title": "等价类划分",
+        "created_at": mastery.last_assessed_at,
+    }]
+    assert captured["points"] == ["等价类划分"]
+
+
+def test_generate_practice_without_learning_records_is_course_based(db, monkeypatch):
+    db.query(ReviewPlan).delete()
+    for model in (WrongQuestion, MasteryRecord, PracticeRecord, InterviewRecord):
+        db.query(model).filter_by(profile_id=50).delete()
+    db.commit()
+
+    async def fake_generate(course_name, points, count):
+        return [{"question": "基础练习", "kp_name": points[0], "hint": "课程基础"}]
+
+    monkeypatch.setattr(student_api, "generate_practice", fake_generate)
+    result = asyncio.run(student_api.generate_practice_api(
+        PracticeGenerateRequest(course_id=10), db.get(User, 3), db,
+    ))
+
+    assert "课程基础推荐" in result["recommendation"]["reason"]
+    assert result["recommendation"]["record_refs"] == []
+    assert result["items"][0]["kp_name"] == "等价类划分"
+
+
+def test_student_timeline_has_record_ids_and_excludes_drafts(db):
+    enrollment = db.query(CourseEnrollment).filter_by(student_id=3).one()
+    practice = db.query(PracticeRecord).filter_by(profile_id=50).one()
+    wrong = db.query(WrongQuestion).filter_by(profile_id=50).one()
+    review = db.query(ReviewPlan).join(WrongQuestion).filter(WrongQuestion.id == wrong.id).one()
+    interview = db.query(InterviewRecord).filter_by(profile_id=50).one()
+    submission = db.query(Submission).filter_by(student_id=3, content="我的作答 A").one()
+    submission.created_at = datetime(2026, 3, 1, 8, 0, 0)
+    submission.submitted_at = datetime(2026, 3, 1, 9, 30, 0)
+    db.add(Assignment(
+        id=61, teacher_id=1, course_id=10, class_id=20,
+        title="仅草稿作业", description="要求", status="published",
+    ))
+    db.add(Submission(
+        assignment_id=61, student_id=3, content="私有草稿", status="draft",
+    ))
+    db.commit()
+
+    events = student_records(80, db.get(User, 3), db)
+    expected_ids = {
+        "enrollment": enrollment.id,
+        "practice": practice.id,
+        "wrong": wrong.id,
+        "review": review.id,
+        "interview": interview.id,
+        "assignment": submission.id,
+    }
+    for event_type, record_id in expected_ids.items():
+        assert next(e for e in events if e["type"] == event_type)["record_id"] == record_id
+    assert all(isinstance(e.get("record_id"), int) for e in events)
+    assignment_event = next(e for e in events if e["type"] == "assignment")
+    assert assignment_event["created_at"] == submission.submitted_at.isoformat()
+    assert "仅草稿作业" not in json.dumps(events, ensure_ascii=False)
 
 
 def test_teacher_publish_records_and_filter(db):

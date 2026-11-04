@@ -9,10 +9,21 @@
       </div>
 
       <div class="profile-meta">
-        <div class="profile-avatar">{{ initial }}</div>
+        <div class="profile-avatar">
+          <img v-if="avatarUrl" :src="avatarUrl" alt="头像" />
+          <span v-else>{{ initial }}</span>
+        </div>
         <div>
           <p class="profile-name">{{ form.name || '未命名' }}</p>
           <p class="profile-role">{{ roleLabel }}</p>
+          <el-button
+            size="small" text type="primary"
+            :loading="uploadingAvatar" @click="pickAvatar"
+          >更换头像</el-button>
+          <input
+            ref="avatarInput" type="file" accept="image/png,image/jpeg,image/webp"
+            class="avatar-input" @change="onAvatarChange"
+          />
         </div>
       </div>
 
@@ -43,6 +54,39 @@
         </el-form-item>
         <el-form-item>
           <el-button :loading="changing" @click="changePassword">修改密码</el-button>
+          <el-button :loading="loggingOutAll" @click="logoutAllDevices">退出全部设备</el-button>
+        </el-form-item>
+      </el-form>
+    </div>
+
+    <!-- 隐私设置 -->
+    <div class="profile-card">
+      <p class="card-title">隐私设置</p>
+      <el-form label-width="110px" class="profile-form">
+        <el-form-item label="姓名可见范围">
+          <el-select v-model="privacy.name_visibility" style="width: 220px">
+            <el-option label="仅自己" value="private" />
+            <el-option label="教师可见" value="teachers" />
+            <el-option label="同学可见" value="classmates" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="邮箱可见范围">
+          <el-select v-model="privacy.email_visibility" style="width: 220px">
+            <el-option label="仅自己" value="private" />
+            <el-option label="教师可见" value="teachers" />
+            <el-option label="同学可见" value="classmates" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="学习记录">
+          <el-select v-model="privacy.learning_visibility" style="width: 220px">
+            <el-option label="仅自己" value="private" />
+            <el-option label="教师可见" value="teachers" />
+            <el-option label="同学可见" value="classmates" />
+          </el-select>
+          <span class="privacy-tip">设为「仅自己」后，教师报表不再展示你的学习明细</span>
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" :loading="privacySaving" @click="savePrivacy">保存隐私设置</el-button>
         </el-form-item>
       </el-form>
     </div>
@@ -115,6 +159,27 @@
       </el-table>
     </div>
 
+    <!-- 我的识图图片 -->
+    <div class="profile-card">
+      <div class="card-head">
+        <p class="card-title">我的识图图片</p>
+        <el-button text size="small" :loading="imagesLoading" @click="loadImages">刷新</el-button>
+      </div>
+      <div v-loading="imagesLoading">
+        <div v-if="images.length" class="image-grid">
+          <div v-for="img in images" :key="img.filename" class="image-item">
+            <img :src="img.path" :alt="img.filename" />
+            <div class="image-meta">
+              <span>{{ formatTime(img.created_at) }}</span>
+              <el-button text type="danger" size="small" @click="removeImage(img)">删除</el-button>
+            </div>
+          </div>
+        </div>
+        <el-empty v-else-if="!imagesLoading" description="暂无识图图片" :image-size="60" />
+      </div>
+      <p class="hint">识图原图保留 30 天后自动清理，也可在此提前删除。</p>
+    </div>
+
     <!-- 账号与数据 -->
     <div class="profile-card">
       <p class="card-title">账号与数据</p>
@@ -157,19 +222,30 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { meApi } from '../../api/me'
 import { recordsApi } from '../../api/records'
 import { classroomApi } from '../../api/classroom'
+import { uploadApi } from '../../api/uploads'
 import { useUserStore } from '../../stores/user'
 
 const router = useRouter()
 const userStore = useUserStore()
 
 const form = reactive({ name: '', email: '' })
+const avatarUrl = ref('')
+const avatarInput = ref(null)
+const uploadingAvatar = ref(false)
+const privacy = reactive({
+  name_visibility: 'classmates',
+  email_visibility: 'private',
+  learning_visibility: 'teachers',
+})
+const privacySaving = ref(false)
 const pwd = reactive({ old: '', next: '', confirm: '' })
 const saving = ref(false)
 const changing = ref(false)
+const loggingOutAll = ref(false)
 
 const records = ref([])
 const recordsLoading = ref(false)
@@ -177,6 +253,9 @@ const publishRows = ref([])
 const publishLoading = ref(false)
 const classes = ref([])
 const classFilter = ref(null)
+
+const images = ref([])
+const imagesLoading = ref(false)
 
 const exporting = ref(false)
 const deactivateVisible = ref(false)
@@ -194,7 +273,11 @@ onMounted(async () => {
     const data = await meApi.profile()
     form.name = data.name || ''
     form.email = data.email || ''
+    avatarUrl.value = data.avatar_url || ''
   } catch { /* 拦截器已提示 */ }
+
+  loadPrivacy()
+  loadImages()
 
   if (userStore.isStudent) loadRecords()
   if (userStore.isTeacher) {
@@ -202,6 +285,48 @@ onMounted(async () => {
     loadPublish()
   }
 })
+
+function pickAvatar() {
+  avatarInput.value?.click()
+}
+
+async function onAvatarChange(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file) return
+  if (!/image\/(png|jpe?g|webp)/.test(file.type)) {
+    return ElMessage.warning('仅支持 PNG / JPG / WEBP 图片')
+  }
+  if (file.size > 2 * 1024 * 1024) {
+    return ElMessage.warning('头像不能超过 2MB')
+  }
+  uploadingAvatar.value = true
+  try {
+    const data = await meApi.uploadAvatar(file)
+    avatarUrl.value = data.avatar_url
+    userStore.user = { ...(userStore.user || {}), avatar_url: data.avatar_url }
+    localStorage.setItem('itea_user', JSON.stringify(userStore.user))
+    ElMessage.success('头像已更新')
+  } catch { /* 拦截器已提示 */ } finally {
+    uploadingAvatar.value = false
+  }
+}
+
+async function loadPrivacy() {
+  try {
+    Object.assign(privacy, await meApi.privacy())
+  } catch { /* 拦截器已提示 */ }
+}
+
+async function savePrivacy() {
+  privacySaving.value = true
+  try {
+    Object.assign(privacy, await meApi.updatePrivacy({ ...privacy }))
+    ElMessage.success('隐私设置已保存')
+  } catch { /* 拦截器已提示 */ } finally {
+    privacySaving.value = false
+  }
+}
 
 async function saveProfile() {
   if (!form.name.trim()) return ElMessage.warning('姓名不能为空')
@@ -223,12 +348,30 @@ async function changePassword() {
   changing.value = true
   try {
     await meApi.changePassword(pwd.old, pwd.next)
-    ElMessage.success('密码已修改')
-    pwd.old = ''
-    pwd.next = ''
-    pwd.confirm = ''
+    ElMessage.success('密码已修改，请重新登录')
+    userStore.logout()
+    await router.push('/login')
   } catch { /* 拦截器已提示 */ } finally {
     changing.value = false
+  }
+}
+
+async function logoutAllDevices() {
+  try {
+    await ElMessageBox.confirm(
+      '退出后所有设备上的登录状态都会立即失效，需要重新登录。',
+      '退出全部设备',
+      { type: 'warning', confirmButtonText: '退出全部', cancelButtonText: '取消' },
+    )
+  } catch { return }
+  loggingOutAll.value = true
+  try {
+    await meApi.logoutAll()
+    userStore.logout()
+    ElMessage.success('已退出全部设备')
+    await router.push('/login')
+  } catch { /* 拦截器已提示 */ } finally {
+    loggingOutAll.value = false
   }
 }
 
@@ -292,6 +435,31 @@ function statusLabel(s) {
     draft: '草稿', published: '已发布', closed: '已关闭',
     active: '进行中', archived: '已归档',
   }[s] || s
+}
+
+// ---------- 识图图片自助管理 ----------
+
+async function loadImages() {
+  imagesLoading.value = true
+  try {
+    const data = await uploadApi.listMine()
+    images.value = data.items || []
+  } catch { /* 拦截器已提示 */ } finally {
+    imagesLoading.value = false
+  }
+}
+
+async function removeImage(img) {
+  try {
+    await ElMessageBox.confirm('删除后无法恢复，确定删除这张识图图片？', '删除图片', {
+      type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消',
+    })
+  } catch { return }
+  try {
+    await uploadApi.removeMine(img.filename)
+    images.value = images.value.filter((item) => item.filename !== img.filename)
+    ElMessage.success('已删除')
+  } catch { /* 拦截器已提示 */ }
 }
 
 // ---------- 导出与注销 ----------
@@ -377,6 +545,18 @@ function formatTime(t) {
   background: var(--grad-brand);
   color: #fff;
   font-size: 18px;
+  overflow: hidden;
+}
+.profile-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.avatar-input { display: none; }
+.privacy-tip {
+  margin-left: var(--sp-3);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
 }
 .profile-name {
   font-size: var(--fs-md);
@@ -407,6 +587,33 @@ function formatTime(t) {
   margin-bottom: var(--sp-3);
 }
 .timeline-wrap { min-height: 80px; }
+.image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-2);
+}
+.image-item {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+.image-item img {
+  display: block;
+  width: 100%;
+  height: 110px;
+  object-fit: cover;
+  background: var(--bg-page);
+}
+.image-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-1);
+  padding: 4px 8px;
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
 .record__head { display: flex; align-items: center; gap: var(--sp-2); }
 .record__title { font-size: var(--fs-sm); color: var(--text-primary); }
 .record__detail {

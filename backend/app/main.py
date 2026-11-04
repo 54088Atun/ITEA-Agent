@@ -14,11 +14,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings, BASE_DIR
+from app.core.log_sanitizer import SensitiveLogFilter
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+for handler in logging.getLogger().handlers:
+    if not any(isinstance(item, SensitiveLogFilter) for item in handler.filters):
+        handler.addFilter(SensitiveLogFilter())
 logger = logging.getLogger(__name__)
 
 # ---------- 密钥安全防线:启动即校验 ----------
@@ -55,7 +59,16 @@ async def startup():
     from app.agent.tools.reminder_scheduler import start_scheduler
     start_scheduler()
 
-    # 3. 预构建 LangGraph 图(首次编译较慢,提前完成)
+    # 3. 收尾上次进程遗留的 running 运行,转入死信队列待恢复
+    try:
+        from app.services.agent_runs import mark_stale_running_as_failed
+        stale = mark_stale_running_as_failed()
+        if stale:
+            logger.info("已将 %s 条中断运行转入死信队列", stale)
+    except Exception as e:
+        logger.warning("中断运行收尾失败: %s", e)
+
+    # 4. 预构建 LangGraph 图(首次编译较慢,提前完成)
     try:
         from app.agent.graph import get_graph
         get_graph()

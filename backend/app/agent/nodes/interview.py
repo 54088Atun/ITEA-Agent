@@ -7,10 +7,14 @@
 """
 import json
 import logging
+import re
 
 from app.agent.state import AgentState
 from app.agent.llm import llm_invoke
 from app.agent.prompts import load_prompt, render_prompt
+from app.agent.context import build_history, build_rag_context, compress_profile
+from app.agent.data_api import fetch_course_evidence, fetch_profile
+from app.agent.sources import build_sources
 
 logger = logging.getLogger(__name__)
 
@@ -27,15 +31,39 @@ def _is_session_end(user_input: str) -> bool:
     return any(kw in user_input for kw in ["结束面试", "面试结束", "总结一下", "打分", "结束吧"])
 
 
-async def interview_node(state: AgentState) -> dict:
-    """面试实训节点"""
-    user_input = state["messages"][-1]["content"] if state.get("messages") else ""
-    snapshot = state.get("profile_snapshot", {})
-    snapshot_str = json.dumps(snapshot, ensure_ascii=False, indent=2) if snapshot else "(暂无学情数据)"
+def _output_score(output: str, label: str) -> int | None:
+    """只提取模型明确给出的 0-100 分数,缺失或越界均留空"""
+    match = re.search(
+        rf"{re.escape(label)}(?:评分)?\s*[:：]?\s*(?:为\s*)?(\d{{1,3}})(?!\d)",
+        output,
+    )
+    if not match:
+        return None
+    score = int(match.group(1))
+    return score if 0 <= score <= 100 else None
 
-    # 1. 组装 system prompt
+
+async def interview_node(state: AgentState) -> dict:
+    """面试实训节点:运行时直接读取学情与课程资料"""
+    user_input = state["messages"][-1]["content"] if state.get("messages") else ""
+    course_id = state.get("course_id")
+
+    # 1. 直接调用数据 API
+    user_role = state.get("user_role", "student")
+    profile = fetch_profile(state["user_id"], course_id, user_role)
+    snapshot_str = compress_profile(profile)
+    evidence = fetch_course_evidence(user_input, course_id, state["user_id"], user_role)
+    raw_context = evidence.get("context", "")
+    rag_context, _ = build_rag_context(evidence, user_input)
+    sources = build_sources(
+        raw_context, has_profile=bool(profile),
+        fragments=evidence.get("fragments"), course_id=course_id,
+    )
+
     template = load_prompt("interview")
     system_prompt = render_prompt(template, profile_snapshot=snapshot_str)
+    if rag_context:
+        system_prompt += f"\n\n【课程资料参考】\n{rag_context}"
 
     # 反思重写:注入上一轮反思意见
     reflection_notes = state.get("reflection_notes", "")
@@ -46,9 +74,8 @@ async def interview_node(state: AgentState) -> dict:
         )
 
     messages = [{"role": "system", "content": system_prompt}]
-    history = state.get("messages", [])[-MAX_HISTORY:]
-    for m in history:
-        messages.append({"role": m.get("role", "user"), "content": m.get("content", "")})
+    history = build_history(state.get("messages", []), limit=MAX_HISTORY)
+    messages.extend(history)
 
     # 2. 面试结束场景:追加总结指令
     if _is_session_end(user_input):
@@ -57,9 +84,11 @@ async def interview_node(state: AgentState) -> dict:
             "content": (
                 "面试已结束,请输出本次模拟面试总结,包含:\n"
                 "1. 各轮回答的亮点与改进点\n"
-                "2. 综合评分(0-100)\n"
-                "3. 薄弱知识点总结\n"
-                "4. 推荐复习方向\n"
+                "2. 专业知识、逻辑表达、岗位匹配、沟通应答四个维度评分(各0-100)\n"
+                "3. 综合评分(0-100)\n"
+                "4. 薄弱知识点总结与推荐复习方向\n"
+                "评分按以下独立行输出:专业知识：X分、逻辑表达：X分、"
+                "岗位匹配：X分、沟通应答：X分、综合评分：X分。\n"
                 "格式用 Markdown,最后追加 [AI 辅助参考,请师生审核]"
             ),
         })
@@ -72,6 +101,8 @@ async def interview_node(state: AgentState) -> dict:
         return {
             "final_output": "面试实训服务暂时不可用,请稍后重试。[AI 辅助参考,请师生审核]",
             "profile_updates": {},
+            "rag_context": raw_context,
+            "sources": sources,
         }
 
     # 4. 面试结束时生成档案更新
@@ -79,17 +110,24 @@ async def interview_node(state: AgentState) -> dict:
     if _is_session_end(user_input):
         # 从学情快照提取薄弱知识点作为面试记录
         weak_points = [
-            m.get("point", "") for m in snapshot.get("mastery", [])
+            m.get("point", "") for m in profile.get("mastery", [])
             if m.get("level", 1) < 0.6
         ][:5]
+        dimensions = {
+            label: _output_score(output, label)
+            for label in ("专业知识", "逻辑表达", "岗位匹配", "沟通应答")
+        }
         profile_updates["interview_records"] = [{
             "topic": "模拟面试",
             "question_history": json.dumps(
                 [m.get("content", "")[:100] for m in history[-6:]],
                 ensure_ascii=False,
             ),
-            "overall_score": None,  # MVP:不自动解析评分,由教师端复核
+            "overall_score": _output_score(output, "综合评分"),
+            "score_dimensions": json.dumps(dimensions, ensure_ascii=False),
+            "feedback": output,
             "weakness_summary": ";".join(weak_points) if weak_points else "暂无",
+            "assignment_id": state.get("interview_assignment_id"),
         }]
         logger.info("面试实训记录已生成(weak=%s)", weak_points)
 
@@ -107,4 +145,8 @@ async def interview_node(state: AgentState) -> dict:
     if "[AI 辅助参考" not in output:
         output += "\n\n[AI 辅助参考,请师生审核]"
 
-    return {"final_output": output, "profile_updates": profile_updates}
+    # 7. 标注回答依据(由对话层统一渲染页脚,避免被安全分级误判)
+    return {
+        "final_output": output, "profile_updates": profile_updates,
+        "rag_context": raw_context, "sources": sources,
+    }

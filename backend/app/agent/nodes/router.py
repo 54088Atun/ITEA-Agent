@@ -4,10 +4,14 @@ import logging
 from app.agent.state import AgentState
 from app.agent.llm import llm_invoke
 from app.agent.prompts import load_prompt
+from app.services.answer_guard import check_answer_request
 
 logger = logging.getLogger(__name__)
 
 VALID_INTENTS = {"prepare", "learn", "review", "interview", "violation", "chat"}
+
+# 显式触发多 Agent 协作的短语(与前端开关互补)
+COLLAB_HINTS = ("多agent协作", "多 agent 协作", "多智能体协作", "协作模式")
 
 
 def _parse_json(text: str) -> dict:
@@ -66,7 +70,24 @@ async def router_node(state: AgentState) -> dict:
 
     latest_msg = state["messages"][-1]["content"] if state["messages"] else ""
 
-    # ---- 第一道:前置风控(优先级最高)----
+    # ---- 第一道:未截止作业/考试答案保护(AS-10,决策 12)----
+    # 确定性判定优先于模型风控:命中题干或显式索要答案即拦截转引导
+    guard = check_answer_request(
+        state["user_id"], state["user_role"], latest_msg, state.get("course_id"),
+    )
+    if guard:
+        logger.warning(
+            "未截止作业答案保护命中(%s): %s", guard.get("reason"), guard.get("title"),
+        )
+        return {
+            "risk_flag": True,
+            "risk_type": guard.get("risk_type", "未截止作业答案保护"),
+            "risk_target": f"{guard.get('kind', '')}#{guard.get('id', '')}",
+            "intent": "violation",
+            "branch": "block",
+        }
+
+    # ---- 第二道:前置风控(优先级最高)----
     risk_prompt = load_prompt("risk_guard")
     risk_resp = await llm_invoke([
         {"role": "system", "content": risk_prompt},
@@ -84,6 +105,18 @@ async def router_node(state: AgentState) -> dict:
             "risk_type": risk.get("risk_type", "未知"),
             "intent": "violation",
             "branch": "block",
+        }
+
+    # ---- 多 Agent 协作:显式开关或显式短语,跳过单分支意图识别 ----
+    if state.get("collaborate") or any(
+        hint in latest_msg.lower() for hint in COLLAB_HINTS
+    ):
+        logger.info("协作模式启用,进入 team 分支")
+        return {
+            "risk_flag": False,
+            "risk_type": "",
+            "intent": "chat",
+            "branch": "team",
         }
 
     # ---- 第二道:意图识别与分支路由 ----

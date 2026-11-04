@@ -57,6 +57,8 @@ def _user(user_id=1, role="admin", admin_level="super", status="active"):
         admin_api.admin_upload_material,
         admin_api.admin_export,
         admin_api.admin_interview_start,
+        admin_api.batch_update_user_status,
+        admin_api.batch_audit_courses,
     ],
 )
 def test_business_writes_require_admin_write(endpoint):
@@ -411,8 +413,10 @@ def test_create_user_audit_failure_rolls_back_real_transaction(monkeypatch):
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, "
                 "role VARCHAR(20) NOT NULL, admin_level VARCHAR(20), "
                 "name VARCHAR(50) NOT NULL, email VARCHAR(100) NOT NULL UNIQUE, "
+                "avatar_url VARCHAR(255), "
                 "password_hash VARCHAR(255) NOT NULL, "
-                "status VARCHAR(20) NOT NULL, created_at DATETIME)"
+                "status VARCHAR(20) NOT NULL, "
+                "token_version INTEGER NOT NULL DEFAULT 0, created_at DATETIME)"
             )
         monkeypatch.setattr(admin_api, "hash_password", lambda _: "hash")
         monkeypatch.setattr(admin_api, "_audit", MagicMock(return_value=None))

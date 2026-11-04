@@ -77,6 +77,22 @@ export const adminApi = {
     return http.put('/admin/config', { items })
   },
 
+  // ---------- 站点内容 ----------
+  siteContent() {
+    return http.get('/admin/site-content')
+  },
+  saveSiteContent(data) {
+    // {home?: object, contact?: object}
+    return http.put('/admin/site-content', data)
+  },
+  uploadSiteImage(file) {
+    const form = new FormData()
+    form.append('file', file)
+    return http.post('/admin/site-image', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
+
   // ---------- 统计 ----------
   statsOverview() {
     return http.get('/admin/stats/overview')
@@ -89,5 +105,30 @@ export const adminApi = {
   },
   statsAgent() {
     return http.get('/admin/stats/agent')
+  },
+
+  // ---------- 管理动作:先预览再执行 ----------
+  previewAction(action, params = {}) {
+    // 只返回影响范围与确认令牌，不写库
+    return http.post('/admin/actions/preview', { action, params })
+  },
+  executeAction(data) {
+    // {action, params, confirmation_token, idempotency_key}
+    return http.post('/admin/actions/execute', data)
+  },
+
+  // ---------- Agent 运行回放 ----------
+  agentRuns(params) {
+    // {status, user_id, branch, page, page_size}
+    return http.get('/admin/agent/runs', { params })
+  },
+  agentRun(id) {
+    return http.get(`/admin/agent/runs/${id}`)
+  },
+  agentRunTrace(id) {
+    return http.get(`/admin/agent/runs/${id}/trace`)
+  },
+  agentRunStats() {
+    return http.get('/admin/agent/stats')
   },
 }

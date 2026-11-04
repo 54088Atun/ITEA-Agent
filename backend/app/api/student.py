@@ -5,6 +5,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -12,17 +13,23 @@ from app.core.deps import require_student
 from app.models.user import User
 from app.models.course import Course, KnowledgePoint
 from app.models.classroom import CourseEnrollment, ClassMember
+from app.models.assignment import Assignment, Submission
+from app.models.exam import Exam, ExamRecord
 from app.models.interview_assignment import InterviewAssignment
 from app.models.profile import StudentProfile, MasteryRecord, WrongQuestion, ReviewPlan
 from app.models.practice import PracticeRecord
 from app.models.interview import InterviewRecord
+from app.api.assignments import _student_conditions as _assignment_conditions
+from app.api.exams import _student_conditions as _exam_conditions
 from app.schemas.agent import ChatRequest
 from app.schemas.student import (
     WrongQuestionOut, ReviewPlanOut, ProgressOut, MasteryItem, InterviewRecordOut,
     InterviewStartRequest, EnrollOut, PracticeSubmitRequest,
     PracticeGenerateRequest, WrongQuestionCreate, NotificationPreferenceUpdate,
+    InterviewVisibilityUpdate,
 )
 from app.api.chat import stream_agent_response, SSE_HEADERS
+from app.services.course_access import is_open_to_students, visible_course_ids
 from app.services.practice_generator import generate_practice
 from app.services.notifications import (
     get_preferences, list_notifications,
@@ -49,6 +56,8 @@ def _ensure_profile(
 
     user = db.query(User).filter(User.id == user_id).first()
     if require_enrolled and user and user.role == "student":
+        if not is_open_to_students(course):
+            raise HTTPException(status_code=403, detail="课程未通过平台审核，暂不可访问")
         enrolled = db.query(CourseEnrollment).filter(
             CourseEnrollment.course_id == course_id,
             CourseEnrollment.student_id == user_id,
@@ -89,21 +98,300 @@ def _build_progress(db: Session, profile: StudentProfile, course_id: int) -> Pro
     )
 
 
+# ---------- 学习聚合与下一步建议 ----------
+
+def _pending_assignments(db: Session, student: User, course_id: int) -> list[Assignment]:
+    """该课程下学生可见且尚未正式提交的已发布作业"""
+    conditions = _assignment_conditions(db, student)
+    if not conditions:
+        return []
+    rows = (
+        db.query(Assignment)
+        .filter(
+            Assignment.course_id == course_id,
+            Assignment.status == "published",
+            or_(*conditions),
+        )
+        .order_by(Assignment.due_at.asc(), Assignment.id.desc())
+        .all()
+    )
+    if not rows:
+        return []
+    submitted_ids = {
+        sid for (sid,) in db.query(Submission.assignment_id).filter(
+            Submission.student_id == student.id,
+            Submission.status == "submitted",
+            Submission.assignment_id.in_([row.id for row in rows]),
+        ).all()
+    }
+    return [row for row in rows if row.id not in submitted_ids]
+
+
+def _pending_exams(db: Session, student: User, course_id: int) -> list[Exam]:
+    """该课程下学生可见、尚未作答的已发布考试"""
+    conditions = _exam_conditions(db, student)
+    if not conditions:
+        return []
+    rows = (
+        db.query(Exam)
+        .filter(
+            Exam.course_id == course_id,
+            Exam.status == "published",
+            or_(*conditions),
+        )
+        .order_by(Exam.due_at.asc(), Exam.id.desc())
+        .all()
+    )
+    if not rows:
+        return []
+    done_ids = {
+        eid for (eid,) in db.query(ExamRecord.exam_id).filter(
+            ExamRecord.student_id == student.id,
+            ExamRecord.exam_id.in_([row.id for row in rows]),
+        ).all()
+    }
+    return [row for row in rows if row.id not in done_ids]
+
+
+def _course_snapshot(db: Session, student: User, profile: StudentProfile) -> dict:
+    """单个课程的学习快照:薄弱点、到期复习、待交作业、待考考试"""
+    now = datetime.utcnow()
+    course = db.query(Course).filter(Course.id == profile.course_id).first()
+
+    weak_rows = (
+        db.query(KnowledgePoint, MasteryRecord)
+        .join(MasteryRecord, MasteryRecord.kp_id == KnowledgePoint.id)
+        .filter(
+            MasteryRecord.profile_id == profile.id,
+            MasteryRecord.mastery_level < 60,
+        )
+        .order_by(MasteryRecord.mastery_level.asc())
+        .limit(5)
+        .all()
+    )
+    weak_points = [
+        {
+            "kp_id": kp.id,
+            "kp_name": kp.name,
+            "mastery_level": int(record.mastery_level or 0),
+        }
+        for kp, record in weak_rows
+    ]
+
+    due_rows = (
+        db.query(ReviewPlan)
+        .join(WrongQuestion, ReviewPlan.wrong_question_id == WrongQuestion.id)
+        .filter(
+            WrongQuestion.profile_id == profile.id,
+            ReviewPlan.status == "pending",
+            ReviewPlan.next_review_at <= now,
+        )
+        .order_by(ReviewPlan.next_review_at.asc())
+        .all()
+    )
+
+    assignments = _pending_assignments(db, student, profile.course_id)
+    exams = _pending_exams(db, student, profile.course_id)
+
+    last_interview = (
+        db.query(InterviewRecord)
+        .filter(InterviewRecord.profile_id == profile.id)
+        .order_by(InterviewRecord.round.desc())
+        .first()
+    )
+
+    return {
+        "course": {
+            "id": course.id,
+            "name": course.name,
+            "code": course.code,
+            "overall_progress": float(profile.overall_progress or 0),
+        },
+        "weak_knowledge_points": weak_points,
+        "due_reviews": {
+            "count": len(due_rows),
+            "next_at": due_rows[0].next_review_at if due_rows else None,
+        },
+        "pending_assignments": {
+            "count": len(assignments),
+            "items": [
+                {
+                    "id": row.id,
+                    "title": row.title,
+                    "due_at": row.due_at,
+                    "overdue": bool(row.due_at and row.due_at < now),
+                }
+                for row in assignments[:5]
+            ],
+        },
+        "pending_exams": {
+            "count": len(exams),
+            "items": [
+                {
+                    "id": row.id,
+                    "title": row.title,
+                    "due_at": row.due_at,
+                    "overdue": bool(row.due_at and row.due_at < now),
+                }
+                for row in exams[:5]
+            ],
+        },
+        "last_interview": (
+            {
+                "record_id": last_interview.id,
+                "round": last_interview.round,
+                "score": last_interview.score,
+            }
+            if last_interview else None
+        ),
+    }
+
+
+def _learning_snapshots(
+    db: Session, student: User, course_id: Optional[int] = None,
+) -> list[dict]:
+    """按课程返回学习快照;只包含学生可见课程"""
+    visible = set(visible_course_ids(student, db))
+    query = db.query(StudentProfile).filter(StudentProfile.user_id == student.id)
+    if course_id is not None:
+        query = query.filter(StudentProfile.course_id == course_id)
+    profiles = query.all()
+    return [
+        _course_snapshot(db, student, profile)
+        for profile in profiles
+        if profile.course_id in visible
+    ]
+
+
+@router.get("/learning-overview")
+def learning_overview(
+    course_id: Optional[int] = Query(None, description="不传则汇总全部可见课程"),
+    student: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    """学习总览:进度、薄弱点、到期复习、待交作业、待考考试一次返回"""
+    if course_id is not None:
+        _ensure_profile(db, student.id, course_id)
+    courses = _learning_snapshots(db, student, course_id)
+    return {
+        "courses": courses,
+        "summary": {
+            "course_count": len(courses),
+            "weak_points": sum(len(item["weak_knowledge_points"]) for item in courses),
+            "due_reviews": sum(item["due_reviews"]["count"] for item in courses),
+            "pending_assignments": sum(item["pending_assignments"]["count"] for item in courses),
+            "pending_exams": sum(item["pending_exams"]["count"] for item in courses),
+        },
+    }
+
+
+@router.get("/recommendations")
+def learning_recommendations(
+    course_id: Optional[int] = Query(None, description="不传则汇总全部可见课程"),
+    limit: int = Query(10, ge=1, le=30),
+    student: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    """下一步建议:按截止时间与薄弱程度给出可执行动作,不调用模型"""
+    if course_id is not None:
+        _ensure_profile(db, student.id, course_id)
+    now = datetime.utcnow()
+    items: list[dict] = []
+
+    for snapshot in _learning_snapshots(db, student, course_id):
+        course = snapshot["course"]
+        for exam in snapshot["pending_exams"]["items"]:
+            hours_left = None
+            if exam["due_at"]:
+                hours_left = (exam["due_at"] - now).total_seconds() / 3600
+            items.append({
+                "type": "exam",
+                "priority": "high" if (exam["overdue"] or (hours_left is not None and hours_left <= 48)) else "medium",
+                "title": f"完成考试:{exam['title']}",
+                "reason": "考试已过截止时间" if exam["overdue"] else "考试尚未作答",
+                "course_id": course["id"],
+                "course_name": course["name"],
+                "target_id": exam["id"],
+                "due_at": exam["due_at"],
+            })
+        for assignment in snapshot["pending_assignments"]["items"]:
+            items.append({
+                "type": "assignment",
+                "priority": "high" if assignment["overdue"] else "medium",
+                "title": f"提交作业:{assignment['title']}",
+                "reason": "作业已过截止时间" if assignment["overdue"] else "作业尚未提交",
+                "course_id": course["id"],
+                "course_name": course["name"],
+                "target_id": assignment["id"],
+                "due_at": assignment["due_at"],
+            })
+        if snapshot["due_reviews"]["count"]:
+            items.append({
+                "type": "review",
+                "priority": "medium",
+                "title": f"完成到期错题复习({snapshot['due_reviews']['count']} 项)",
+                "reason": "遗忘曲线已到复习时间",
+                "course_id": course["id"],
+                "course_name": course["name"],
+                "target_id": None,
+                "due_at": snapshot["due_reviews"]["next_at"],
+            })
+        for point in snapshot["weak_knowledge_points"][:2]:
+            items.append({
+                "type": "practice",
+                "priority": "medium" if point["mastery_level"] < 40 else "low",
+                "title": f"巩固知识点:{point['kp_name']}",
+                "reason": f"当前掌握度 {point['mastery_level']}%",
+                "course_id": course["id"],
+                "course_name": course["name"],
+                "target_id": point["kp_id"],
+                "due_at": None,
+            })
+
+    priority_rank = {"high": 0, "medium": 1, "low": 2}
+    items.sort(key=lambda item: (
+        priority_rank.get(item["priority"], 3),
+        item["due_at"] or datetime.max,
+    ))
+    selected = items[:limit]
+    return {
+        "generated_at": now,
+        "total": len(items),
+        "items": selected,
+        "summary": (
+            f"共 {len(items)} 条待办建议,其中高优先级 "
+            f"{sum(1 for item in items if item['priority'] == 'high')} 条"
+        ),
+    }
+
+
 # ---------- 我的课程 ----------
 
 @router.get("/courses")
 def my_courses(
     student: User = Depends(require_student),
     db: Session = Depends(get_db),
+    keyword: Optional[str] = None,
+    semester: Optional[str] = None,
 ):
-    """我的课程列表(已加入的课程)"""
-    rows = (
+    """我的课程列表(已加入且已通过平台审核的课程);支持名称/代码搜索与学期筛选"""
+    query = (
         db.query(Course, StudentProfile)
         .join(StudentProfile, StudentProfile.course_id == Course.id)
-        .filter(StudentProfile.user_id == student.id)
-        .order_by(Course.id.desc())
-        .all()
+        .filter(
+            StudentProfile.user_id == student.id,
+            Course.audit_status == "approved",
+            Course.deleted_at.is_(None),
+        )
     )
+    text = (keyword or "").strip()
+    if text:
+        like = f"%{text}%"
+        query = query.filter(or_(Course.name.like(like), Course.code.like(like)))
+    if semester:
+        query = query.filter(Course.semester == semester)
+
+    rows = query.order_by(Course.id.desc()).all()
     return [
         {
             "id": course.id,
@@ -130,6 +418,8 @@ def enroll_course(
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
     if student.role == "student":
+        if not is_open_to_students(course):
+            raise HTTPException(status_code=403, detail="课程未通过平台审核，暂不可加入")
         enrolled = db.query(CourseEnrollment).filter(
             CourseEnrollment.course_id == course_id,
             CourseEnrollment.student_id == student.id,
@@ -318,6 +608,59 @@ def list_interview_records_by_path(
     return _interview_records(db, student.id, course_id)
 
 
+@router.patch("/interview/records/{record_id}/visibility", response_model=InterviewRecordOut)
+def update_interview_visibility(
+    record_id: int,
+    req: InterviewVisibilityUpdate,
+    student: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    record = (
+        db.query(InterviewRecord)
+        .join(StudentProfile, InterviewRecord.profile_id == StudentProfile.id)
+        .filter(InterviewRecord.id == record_id, StudentProfile.user_id == student.id)
+        .first()
+    )
+    if not record:
+        raise HTTPException(status_code=404, detail="面试记录不存在")
+    record.visibility = req.visibility
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def _visible_interview_assignment(
+    db: Session, student_id: int, assignment_id: int, course_id: int,
+) -> InterviewAssignment:
+    assignment = db.query(InterviewAssignment).filter(
+        InterviewAssignment.id == assignment_id,
+    ).first()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="面试作业不存在")
+    if (
+        assignment.status != "active"
+        or (assignment.due_at and assignment.due_at < datetime.utcnow())
+    ):
+        raise HTTPException(status_code=403, detail="面试作业已关闭或已截止")
+
+    if assignment.class_id is not None:
+        visible = db.query(ClassMember).filter(
+            ClassMember.class_id == assignment.class_id,
+            ClassMember.student_id == student_id,
+            ClassMember.status == "active",
+        ).first() is not None
+    else:
+        visible = db.query(CourseEnrollment).filter(
+            CourseEnrollment.course_id == assignment.course_id,
+            CourseEnrollment.student_id == student_id,
+        ).first() is not None
+    if not visible:
+        raise HTTPException(status_code=403, detail="无权开始该面试作业")
+    if assignment.course_id is not None and assignment.course_id != course_id:
+        raise HTTPException(status_code=400, detail="面试作业与课程不匹配")
+    return assignment
+
+
 @router.post("/interview/start")
 def start_interview(
     req: InterviewStartRequest,
@@ -326,6 +669,8 @@ def start_interview(
     db: Session = Depends(get_db),
 ):
     """开启模拟面试(SSE,复用 Agent 图 interview 分支)"""
+    if req.assignment_id is not None:
+        _visible_interview_assignment(db, student.id, req.assignment_id, req.course_id)
     _ensure_profile(db, student.id, req.course_id)
 
     msg = f"请开始模拟面试,课程 ID 为 {req.course_id}。"
@@ -337,7 +682,10 @@ def start_interview(
         ]
         if names:
             msg += "请重点考察以下知识点:" + "、".join(names) + "。"
-    chat_req = ChatRequest(session_id=None, course_id=req.course_id, message=msg)
+    chat_req = ChatRequest(
+        session_id=None, course_id=req.course_id, message=msg,
+        interview_assignment_id=req.assignment_id,
+    )
     return StreamingResponse(
         stream_agent_response(chat_req, student, db, force_branch="interview", request=request),
         media_type="text/event-stream",
@@ -410,24 +758,66 @@ async def generate_practice_api(
     profile = _ensure_profile(db, student.id, req.course_id)
     course = db.query(Course).filter(Course.id == req.course_id).first()
 
-    names = [
-        name for (name,) in db.query(KnowledgePoint.name)
-        .filter(KnowledgePoint.course_id == req.course_id)
-        .limit(20).all()
-    ]
-    weak = (
-        db.query(KnowledgePoint.name)
-        .join(WrongQuestion, WrongQuestion.kp_id == KnowledgePoint.id)
+    wrong_rows = (
+        db.query(WrongQuestion, KnowledgePoint)
+        .join(KnowledgePoint, WrongQuestion.kp_id == KnowledgePoint.id)
         .filter(WrongQuestion.profile_id == profile.id)
+        .order_by(WrongQuestion.created_at.desc(), WrongQuestion.id.desc())
         .limit(5)
         .all()
     )
-    for (name,) in weak:
-        if name and name not in names:
-            names.insert(0, name)
+    mastery_rows = (
+        db.query(MasteryRecord, KnowledgePoint)
+        .join(KnowledgePoint, MasteryRecord.kp_id == KnowledgePoint.id)
+        .filter(
+            MasteryRecord.profile_id == profile.id,
+            MasteryRecord.mastery_level < 60,
+        )
+        .order_by(MasteryRecord.last_assessed_at.desc(), MasteryRecord.id.desc())
+        .limit(5)
+        .all()
+    )
+    record_refs = [
+        {
+            "type": "wrong_question",
+            "id": wq.id,
+            "title": kp.name,
+            "created_at": wq.created_at,
+        }
+        for wq, kp in wrong_rows
+    ] + [
+        {
+            "type": "mastery",
+            "id": record.id,
+            "title": kp.name,
+            "created_at": record.last_assessed_at,
+        }
+        for record, kp in mastery_rows
+    ]
+
+    if record_refs:
+        names = list(dict.fromkeys(ref["title"] for ref in record_refs))
+        sources = []
+        if wrong_rows:
+            sources.append("错题记录")
+        if mastery_rows:
+            sources.append("低掌握知识点记录")
+        titles = "、".join(names)
+        reason = f"根据你的{'和'.join(sources)}，推荐围绕「{titles}」进行巩固练习。"
+    else:
+        names = [
+            name for (name,) in db.query(KnowledgePoint.name)
+            .filter(KnowledgePoint.course_id == req.course_id)
+            .limit(20).all()
+        ]
+        reason = "课程基础推荐：根据课程知识点生成基础练习。"
 
     items = await generate_practice(course.name if course else "课程", names, req.count)
-    return {"course_id": req.course_id, "items": items}
+    return {
+        "course_id": req.course_id,
+        "items": items,
+        "recommendation": {"reason": reason, "record_refs": record_refs},
+    }
 
 
 @router.post("/wrong-questions", response_model=WrongQuestionOut)
@@ -522,7 +912,8 @@ def list_my_interview_assignments(
             "id": r.id, "title": r.title, "description": r.description,
             "course_id": r.course_id, "class_id": r.class_id,
             "teacher_name": teachers.get(r.teacher_id, ""),
-            "due_at": r.due_at, "created_at": r.created_at,
+            "due_at": r.due_at, "duration_minutes": r.duration_minutes,
+            "created_at": r.created_at,
         }
         for r in rows
     ]

@@ -17,11 +17,14 @@ from sqlalchemy.orm import Session
 from app.core.deps import require_teacher
 from app.db.session import get_db
 from app.models.classroom import CourseShare
-from app.models.course import Course, CourseMaterial, KnowledgePoint
+from app.models.course import Course
 from app.models.log import OperationLog
 from app.models.user import User
 from app.schemas.assignment import CourseImportRequest, CourseShareCreate
+from app.services.course_access import is_open_to_students
+from app.services.course_copy import copy_course_structure
 from app.services.feature_flags import is_enabled
+from app.services.write_approval import authorize_write, record_executed
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["课程分享"])
@@ -80,15 +83,6 @@ def _log(db: Session, actor: User, action: str, target_id: int, detail: dict) ->
     ))
 
 
-def _unique_course_code(db: Session, source_code: str) -> str:
-    base = (source_code or "COPY")[:14]
-    for i in range(1, 100):
-        candidate = f"{base}-C{i}"
-        if not db.query(Course).filter(Course.code == candidate).first():
-            return candidate
-    return f"COPY-{secrets.token_hex(4)}"[:20]
-
-
 # ---------- 分享码管理 ----------
 
 @router.post("/teacher/courses/{course_id}/shares")
@@ -97,13 +91,21 @@ def create_share(
     req: CourseShareCreate,
     teacher: User = Depends(require_teacher),
     db: Session = Depends(get_db),
+    confirm: bool = False,
 ):
     """生成分享码:默认 7 天、1 次可用,可随时撤销"""
     _require_teacher_role(teacher)
     if not is_enabled(db, "feature_course_share"):
         raise HTTPException(status_code=403, detail="课程分享功能已关闭")
     course = _owned_course(db, course_id, teacher)
+    if not is_open_to_students(course):
+        raise HTTPException(status_code=400, detail="课程未通过平台审核，暂不可分享")
 
+    action = authorize_write(
+        db, teacher, "course.share_create", confirmed=confirm,
+        target_type="course", target_id=course.id,
+        detail={"expires_days": req.expires_days, "max_uses": req.max_uses},
+    )
     share = CourseShare(
         course_id=course.id,
         owner_id=teacher.id,
@@ -118,6 +120,10 @@ def create_share(
         "share_id": share.id, "code": share.code,
         "expires_days": req.expires_days, "max_uses": req.max_uses,
     })
+    record_executed(
+        db, teacher, action, target_type="course", target_id=course.id,
+        detail={"share_id": share.id, "max_uses": req.max_uses},
+    )
     db.commit()
     db.refresh(share)
     logger.info("课程分享码生成: course=%s share=%s", course.id, share.id)
@@ -167,12 +173,22 @@ def revoke_share(
     share_id: int,
     teacher: User = Depends(require_teacher),
     db: Session = Depends(get_db),
+    confirm: bool = False,
 ):
     _require_teacher_role(teacher)
     share = _owned_share(db, share_id, teacher)
     if not share.revoked_at:
+        action = authorize_write(
+            db, teacher, "course.share_revoke", confirmed=confirm,
+            target_type="course_share", target_id=share.id,
+            detail={"course_id": share.course_id},
+        )
         share.revoked_at = datetime.utcnow()
         _log(db, teacher, "share_revoke", share.course_id, {"share_id": share.id})
+        record_executed(
+            db, teacher, action, target_type="course_share", target_id=share.id,
+            detail={"course_id": share.course_id},
+        )
         db.commit()
     return {"id": share.id, "status": _share_status(share)}
 
@@ -206,60 +222,17 @@ def import_course(
     if source.teacher_id == teacher.id and teacher.role != "admin":
         raise HTTPException(status_code=400, detail="不能复制自己的课程")
 
-    new_course = Course(
-        teacher_id=teacher.id,
-        name=f"{source.name}（副本）"[:100],
-        code=_unique_course_code(db, source.code),
-        syllabus=source.syllabus,
-        semester=source.semester,
-        audit_status="approved",
+    # 源课程已通过审核,快照副本沿用 approved
+    new_course, stats = copy_course_structure(
+        db, source, teacher.id, audit_status="approved",
     )
-    db.add(new_course)
-    db.flush()
-
-    # 知识点树:两遍写入保留父子关系
-    kps = (
-        db.query(KnowledgePoint)
-        .filter(KnowledgePoint.course_id == source.id)
-        .order_by(KnowledgePoint.id.asc())
-        .all()
-    )
-    id_map = {}
-    for kp in kps:
-        new_kp = KnowledgePoint(
-            course_id=new_course.id,
-            name=kp.name,
-            description=kp.description,
-            parent_id=None,
-        )
-        db.add(new_kp)
-        db.flush()
-        id_map[kp.id] = new_kp
-    for kp in kps:
-        if kp.parent_id and kp.parent_id in id_map:
-            id_map[kp.id].parent_id = id_map[kp.parent_id].id
-
-    # 素材元数据:复用原文件路径,分块数归零提示需重新入库
-    materials = (
-        db.query(CourseMaterial)
-        .filter(CourseMaterial.course_id == source.id)
-        .all()
-    )
-    for m in materials:
-        db.add(CourseMaterial(
-            course_id=new_course.id,
-            type=m.type,
-            title=m.title,
-            file_path=m.file_path,
-            chunk_count=0,
-        ))
 
     share.used_count += 1
     _log(db, teacher, "course_import", new_course.id, {
         "source_course_id": source.id,
         "share_id": share.id,
-        "knowledge_points": len(kps),
-        "materials": len(materials),
+        "knowledge_points": stats["knowledge_points"],
+        "materials": stats["materials"],
     })
     db.commit()
     db.refresh(new_course)
@@ -272,6 +245,6 @@ def import_course(
         "name": new_course.name,
         "code": new_course.code,
         "source_course_id": source.id,
-        "knowledge_points": len(kps),
-        "materials": len(materials),
+        "knowledge_points": stats["knowledge_points"],
+        "materials": stats["materials"],
     }

@@ -99,10 +99,14 @@
   --fs-xl: 22px;
   --fs-2xl: 28px;
   --fs-3xl: 36px;
+  /* 公开首页专用大字阶：仅首页 Hero 使用，避免影响工作台密度 */
+  --fs-display: 40px;
+  --fs-hero: 56px;
 
   --lh-tight: 1.35;
   --lh-base: 1.65;
   --lh-relaxed: 1.8;
+  --lh-display: 1.2;
 
   /* ===== 间距阶梯（4 的倍数，页面留白靠它统一） ===== */
   --sp-1: 4px;

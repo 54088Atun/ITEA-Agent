@@ -6,12 +6,13 @@
     python -m scripts.build_kb --course-id 1 --dir uploads/1   # 直接指定目录
 
 功能:
-    读取课程教材文件(txt/md/pdf) → 分块 → 向量化 → 构建 FAISS 索引 → 回写 chunk_count
+    读取课程教材文件(文本/代码/Office/PDF) → 分块 → 向量化 → 构建 FAISS 索引 → 回写 chunk_count
 """
 import argparse
 import logging
 import os
 import sys
+from pathlib import Path
 
 # 确保能导入 app 包
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -19,27 +20,35 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-SUPPORTED_EXT = {".txt", ".md", ".pdf"}
+from app.services.material_parser import (  # noqa: E402
+    SUPPORTED_EXTS, extract_text, extract_text_with_pages,
+)
+
+SUPPORTED_EXT = SUPPORTED_EXTS
 
 
 def read_file(path: str) -> str:
-    """读取文件内容(txt/md 直读,pdf 用 pdfplumber)"""
-    ext = os.path.splitext(path)[1].lower()
-    if ext in (".txt", ".md"):
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
-            return f.read()
-    elif ext == ".pdf":
-        try:
-            import pdfplumber
-            texts = []
-            with pdfplumber.open(path) as pdf:
-                for page in pdf.pages:
-                    texts.append(page.extract_text() or "")
-            return "\n".join(texts)
-        except ImportError:
-            logger.warning("pdfplumber 未安装,pip install pdfplumber 后重试。跳过 %s", path)
-            return ""
-    return ""
+    """复用统一解析器,覆盖 PDF/Office/文本/代码等格式"""
+    from fastapi import HTTPException
+
+    try:
+        return extract_text(Path(path), os.path.basename(path), max_chars=200000)
+    except HTTPException as exc:
+        logger.warning("解析失败,跳过 %s: %s", path, exc.detail)
+        return ""
+
+
+def read_file_with_pages(path: str) -> tuple[str, list[dict]]:
+    """解析文本并保留页码区间,供来源定位到页码"""
+    from fastapi import HTTPException
+
+    try:
+        return extract_text_with_pages(
+            Path(path), os.path.basename(path), max_chars=200000,
+        )
+    except HTTPException as exc:
+        logger.warning("解析失败,跳过 %s: %s", path, exc.detail)
+        return "", []
 
 
 def collect_from_db(course_id: int) -> list[dict]:
@@ -49,20 +58,25 @@ def collect_from_db(course_id: int) -> list[dict]:
 
     db = SessionLocal()
     try:
-        materials = db.query(CourseMaterial).filter(CourseMaterial.course_id == course_id).all()
+        materials = db.query(CourseMaterial).filter(
+            CourseMaterial.course_id == course_id,
+            CourseMaterial.moderation_status != "rejected",
+        ).all()
         documents = []
         for m in materials:
             if not os.path.exists(m.file_path):
                 logger.warning("文件不存在: %s", m.file_path)
                 continue
-            content = read_file(m.file_path)
+            content, page_spans = read_file_with_pages(m.file_path)
             if content.strip():
                 documents.append({
                     "content": content,
                     "source": m.title,
                     "scope": m.type,
+                    "material_id": m.id,
+                    "page_spans": page_spans,
                 })
-                logger.info("读取教材: %s (%d 字)", m.title, len(content))
+                logger.info("读取教材: %s (%d 字, %d 页)", m.title, len(content), len(page_spans))
         return documents
     finally:
         db.close()

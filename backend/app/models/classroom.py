@@ -29,6 +29,8 @@ class Classroom(Base):
     invite_expires_at = Column(DateTime, nullable=True, comment="邀请码过期时间")
     invite_max_uses = Column(Integer, nullable=False, default=50, server_default="50")
     invite_used = Column(Integer, nullable=False, default=0, server_default="0")
+    max_students = Column(Integer, nullable=False, default=100, server_default="100",
+                          comment="班级学生容量上限")
     status = Column(
         Enum("active", "archived", name="class_status"),
         nullable=False, default="active", server_default="active",
@@ -38,7 +40,7 @@ class Classroom(Base):
 
 
 class ClassMember(Base):
-    """班级成员:一个学生可加入多个班级"""
+    """班级成员:学生或任课教师;角色仅在班级内生效"""
     __tablename__ = "class_members"
     __table_args__ = (
         UniqueConstraint("class_id", "student_id", name="uq_class_member"),
@@ -46,7 +48,17 @@ class ClassMember(Base):
 
     id = Column(BigIntPK, primary_key=True, autoincrement=True)
     class_id = Column(BigInteger, ForeignKey("classes.id"), nullable=False, index=True)
+    # 字段名沿用 student_id,实际存成员用户 ID(学生或教师)
     student_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
+    role = Column(
+        Enum("teacher", "student", "monitor", "representative", "custom",
+             name="class_member_role"),
+        nullable=False, default="student", server_default="student",
+        comment="班级内角色",
+    )
+    title = Column(String(50), nullable=True, comment="班级内头衔,如某课教师/课代表")
+    permissions = Column(Text, nullable=True, comment="自定义角色权限 JSON 数组")
+    invited_by = Column(BigInteger, ForeignKey("users.id"), nullable=True, comment="邀请人")
     status = Column(
         Enum("active", "left", name="class_member_status"),
         nullable=False, default="active", server_default="active",
@@ -73,6 +85,20 @@ class CourseEnrollment(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+class CourseCollaborator(Base):
+    """课程协作者:获得原课程的联合教学权限,不复制课程或学生数据"""
+    __tablename__ = "course_collaborators"
+    __table_args__ = (
+        UniqueConstraint("course_id", "teacher_id", name="uq_course_collaborator"),
+    )
+
+    id = Column(BigIntPK, primary_key=True, autoincrement=True)
+    course_id = Column(BigInteger, ForeignKey("courses.id"), nullable=False, index=True)
+    teacher_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
+    added_by = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class CourseShare(Base):
     """课程分享码:仅教师之间使用,被分享方获得课程快照副本"""
     __tablename__ = "course_shares"
@@ -85,5 +111,30 @@ class CourseShare(Base):
     max_uses = Column(Integer, nullable=False, default=1, server_default="1")
     used_count = Column(Integer, nullable=False, default=0, server_default="0")
     revoked_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class ClassAnnouncement(Base):
+    """班级公告:班主任/获授权的自定义角色发布,班级成员可查看"""
+    __tablename__ = "class_announcements"
+
+    id = Column(BigIntPK, primary_key=True, autoincrement=True)
+    class_id = Column(BigInteger, ForeignKey("classes.id"), nullable=False, index=True)
+    author_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class CodeRedemption(Base):
+    """统一课程码使用审计:教师复制课程 / 学生加入班级"""
+    __tablename__ = "code_redemptions"
+
+    id = Column(BigIntPK, primary_key=True, autoincrement=True)
+    code = Column(String(16), nullable=False, index=True)
+    scope = Column(String(20), nullable=False, comment="course/class")
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
+    role = Column(String(20), nullable=False, comment="teacher/admin/student")
+    action = Column(String(30), nullable=False, comment="course_copy/class_join")
+    target_id = Column(BigInteger, comment="复制后的课程ID或班级ID")
     created_at = Column(DateTime, server_default=func.now())
 

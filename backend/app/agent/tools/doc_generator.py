@@ -70,15 +70,23 @@ def _generate_report(data: dict) -> str:
     """生成学情报表 xlsx"""
     from openpyxl import Workbook
 
+    note = "[AI 辅助参考,请教师审核修改]"
     wb = Workbook()
     ws = wb.active
     ws.title = "学情汇总"
 
+    # 首行标注 AI 生成,表头顺延到第 2 行
+    ws["A1"] = note
+    ws.merge_cells("A1:E1")
+
     # 表头
     headers = ["学生", "知识点", "掌握度", "错题数", "待复习"]
     ws.append(headers)
+    header_row = ws.max_row
     for col in range(1, len(headers) + 1):
-        ws.cell(row=1, column=col).font = ws.cell(row=1, column=col).font.copy(bold=True)
+        ws.cell(row=header_row, column=col).font = ws.cell(
+            row=header_row, column=col,
+        ).font.copy(bold=True)
 
     # 数据行
     for row_data in data.get("rows", []):
@@ -92,7 +100,14 @@ def _generate_report(data: dict) -> str:
 
     # 薄弱知识点汇总 sheet
     ws2 = wb.create_sheet("薄弱知识点TOP10")
+    ws2["A1"] = note
+    ws2.merge_cells("A1:D1")
     ws2.append(["排名", "知识点", "平均掌握度", "错题人次"])
+    header_row2 = ws2.max_row
+    for col in range(1, 5):
+        ws2.cell(row=header_row2, column=col).font = ws2.cell(
+            row=header_row2, column=col,
+        ).font.copy(bold=True)
     for i, wp in enumerate(data.get("weak_points", [])[:10], 1):
         ws2.append([i, wp.get("point", ""), wp.get("avg_mastery", 0), wp.get("wrong_count", 0)])
 

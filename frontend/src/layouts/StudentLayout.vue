@@ -36,6 +36,10 @@
         <el-icon><TrendCharts /></el-icon>
         <span>我的学情</span>
       </el-menu-item>
+      <el-menu-item index="/contact">
+        <el-icon><Service /></el-icon>
+        <span>联系我们</span>
+      </el-menu-item>
       <el-menu-item v-if="userStore.isAdmin" index="/admin/stats">
         <el-icon><Monitor /></el-icon>
         <span>管理后台</span>

@@ -6,11 +6,14 @@
         <p class="page-sub">维护课程题库，AI 生成草稿需你采纳；组卷后发布给班级或课程学生</p>
       </div>
       <div class="page-head__actions">
-        <el-select v-model="courseId" placeholder="选择课程" style="width: 200px" @change="onCourseChange">
+        <el-select v-model="courseId" placeholder="选择课程" filterable style="width: 200px" @change="onCourseChange">
           <el-option v-for="c in courses" :key="c.id" :label="c.name" :value="c.id" />
         </el-select>
         <el-button :disabled="!courseId" @click="openAi">
           <el-icon><MagicStick /></el-icon> AI 出题
+        </el-button>
+        <el-button :disabled="!courseId" @click="openPlan">
+          <el-icon><TrendCharts /></el-icon> AI 科目建议
         </el-button>
         <el-button :disabled="!courseId" @click="openQuestion">
           <el-icon><Plus /></el-icon> 新增题目
@@ -92,6 +95,51 @@
             </el-table-column>
             <template #empty>
               <div class="empty-state">还没有试卷，点击右上角「新建试卷」组卷</div>
+            </template>
+          </el-table>
+        </div>
+      </el-tab-pane>
+
+      <el-tab-pane label="考试建议" name="plans">
+        <div class="panel">
+          <el-alert
+            type="info" :closable="false" show-icon
+            title="AI 按课程知识点推荐考试科目与考核项（题型/题量/分值/难度）；采纳后成为本课程考试配置，不自动组卷或发布。"
+            class="tip"
+          />
+          <el-table :data="plans" v-loading="loadingPlans">
+            <el-table-column prop="id" label="ID" width="70" />
+            <el-table-column label="建议方案" min-width="200">
+              <template #default="{ row }">{{ row.plan.title }}</template>
+            </el-table-column>
+            <el-table-column label="科目数" width="80">
+              <template #default="{ row }">{{ (row.plan.subjects || []).length }}</template>
+            </el-table-column>
+            <el-table-column label="建议题量" width="90">
+              <template #default="{ row }">{{ planQuestionCount(row.plan) }}</template>
+            </el-table-column>
+            <el-table-column label="建议总分" width="90">
+              <template #default="{ row }">{{ row.plan.total_score }} 分</template>
+            </el-table-column>
+            <el-table-column label="状态" width="100">
+              <template #default="{ row }">
+                <el-tag :type="planStatusTag(row.status)" size="small" effect="light">
+                  {{ planStatusLabel(row.status) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="生成时间" width="160">
+              <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+            </el-table-column>
+            <el-table-column label="操作" width="180" fixed="right">
+              <template #default="{ row }">
+                <el-button link type="primary" @click="openPlanPreview(row)">查看</el-button>
+                <el-button v-if="row.status === 'draft'" link type="success" @click="adoptPlan(row)">采纳</el-button>
+                <el-button v-if="row.status !== 'discarded'" link type="danger" @click="discardPlan(row)">丢弃</el-button>
+              </template>
+            </el-table-column>
+            <template #empty>
+              <div class="empty-state">还没有考试建议，点击右上角「AI 科目建议」生成</div>
             </template>
           </el-table>
         </div>
@@ -198,11 +246,88 @@
       </template>
     </el-dialog>
 
+    <!-- AI 考试科目建议生成 -->
+    <el-dialog v-model="planVisible" title="AI 考试科目建议" width="520px">
+      <el-form label-width="90px">
+        <el-form-item label="考试时长">
+          <el-input-number v-model="planForm.duration_minutes" :min="5" :max="300" />
+          <span class="unit">分钟</span>
+        </el-form-item>
+        <el-form-item label="建议总分">
+          <el-input-number v-model="planForm.total_score" :min="10" :max="500" />
+          <span class="unit">分</span>
+        </el-form-item>
+      </el-form>
+      <p class="hint">AI 只生成科目与考核项建议草稿，采纳后成为本课程考试配置，不会自动组卷或发布。</p>
+      <template #footer>
+        <el-button @click="planVisible = false">取消</el-button>
+        <el-button type="primary" :loading="generatingPlan" @click="generatePlan">生成建议</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 考试建议预览 -->
+    <el-dialog
+      v-model="planPreviewVisible"
+      :title="currentPlan?.plan?.title || '考试建议'"
+      width="780px"
+    >
+      <div v-if="currentPlan" class="plan-preview">
+        <p v-if="currentPlan.plan.summary" class="hint">{{ currentPlan.plan.summary }}</p>
+        <div class="plan-meta">
+          <el-tag size="small" effect="light">建议时长 {{ currentPlan.plan.duration_minutes }} 分钟</el-tag>
+          <el-tag size="small" effect="light">建议总分 {{ currentPlan.plan.total_score }} 分</el-tag>
+          <el-tag type="warning" size="small" effect="light">
+            考核项合计 {{ currentPlan.plan.planned_score }} 分
+          </el-tag>
+          <el-tag :type="planStatusTag(currentPlan.status)" size="small" effect="light">
+            {{ planStatusLabel(currentPlan.status) }}
+          </el-tag>
+        </div>
+        <el-table :data="currentPlan.plan.subjects" size="small">
+          <el-table-column type="index" label="#" width="50" />
+          <el-table-column prop="subject" label="科目/章节" min-width="140" />
+          <el-table-column label="覆盖知识点" min-width="170">
+            <template #default="{ row }">{{ (row.kp_names || []).join('、') || '—' }}</template>
+          </el-table-column>
+          <el-table-column label="考核项" min-width="220">
+            <template #default="{ row }">{{ planItemsText(row.items) }}</template>
+          </el-table-column>
+          <el-table-column label="题数" width="70">
+            <template #default="{ row }">{{ row.question_count }}</template>
+          </el-table-column>
+          <el-table-column label="分值" width="70">
+            <template #default="{ row }">{{ row.score }}</template>
+          </el-table-column>
+        </el-table>
+        <p class="hint">
+          考核项分值按「题量 × 每题分值」估算；采纳后可在新建试卷时一键带入标题、时长与组卷说明。
+        </p>
+      </div>
+      <template #footer>
+        <el-button @click="planPreviewVisible = false">关闭</el-button>
+        <el-button
+          v-if="currentPlan && currentPlan.status === 'draft'"
+          type="success" :loading="adoptingPlan" @click="adoptPlan(currentPlan)"
+        >
+          采纳建议
+        </el-button>
+        <el-button
+          v-if="currentPlan && currentPlan.status === 'adopted'"
+          type="primary" @click="usePlanForExam(currentPlan)"
+        >
+          用于新建试卷
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- 新建试卷 -->
     <el-dialog v-model="examVisible" title="新建试卷" width="780px">
       <el-form label-width="96px">
         <el-form-item label="试卷标题">
           <el-input v-model="examForm.title" placeholder="如：第三章 单元测验" />
+        </el-form-item>
+        <el-form-item v-if="examForm.description" label="组卷说明">
+          <el-input v-model="examForm.description" type="textarea" :rows="4" />
         </el-form-item>
         <el-form-item label="面向班级">
           <el-select v-model="examForm.class_id" clearable placeholder="可选，优先按班级发布" style="width: 100%">
@@ -379,10 +504,20 @@ const draft = ref(null)
 const selectedDraft = ref([])
 const adopting = ref(false)
 
+const plans = ref([])
+const loadingPlans = ref(false)
+const planVisible = ref(false)
+const generatingPlan = ref(false)
+const planForm = reactive({ duration_minutes: 90, total_score: 100 })
+const planPreviewVisible = ref(false)
+const currentPlan = ref(null)
+const adoptingPlan = ref(false)
+
 const examVisible = ref(false)
 const savingExam = ref(false)
 const examForm = reactive({
-  title: '', class_id: null, duration_minutes: 60, due_days: 7, perScore: 5, publish: true,
+  title: '', description: '', class_id: null, duration_minutes: 60, due_days: 7,
+  perScore: 5, publish: true,
 })
 const picked = ref([])
 const pickTable = ref()
@@ -411,11 +546,12 @@ onMounted(async () => {
     const data = await classroomApi.list()
     classes.value = Array.isArray(data) ? data : []
   } catch { /* 拦截器已提示 */ }
-  await Promise.all([loadQuestions(), loadExams()])
+  await Promise.all([loadQuestions(), loadExams(), loadPlans()])
 })
 
 function onCourseChange() {
   loadQuestions()
+  loadPlans()
 }
 
 function courseName(id) {
@@ -436,6 +572,14 @@ function examStatusLabel(s) {
 
 function examStatusTag(s) {
   return { draft: 'info', published: 'success', closed: 'warning' }[s] || 'info'
+}
+
+function planStatusLabel(s) {
+  return { draft: '待采纳', adopted: '已采纳', discarded: '已丢弃' }[s] || s
+}
+
+function planStatusTag(s) {
+  return { draft: 'info', adopted: 'success', discarded: 'warning' }[s] || 'info'
 }
 
 function formatTime(t) {
@@ -461,6 +605,20 @@ async function loadExams() {
     exams.value = Array.isArray(rows) ? rows : []
   } catch { /* 拦截器已提示 */ } finally {
     loadingExams.value = false
+  }
+}
+
+async function loadPlans() {
+  if (!courseId.value) {
+    plans.value = []
+    return
+  }
+  loadingPlans.value = true
+  try {
+    const rows = await examApi.examPlanDrafts(courseId.value)
+    plans.value = Array.isArray(rows) ? rows : []
+  } catch { /* 拦截器已提示 */ } finally {
+    loadingPlans.value = false
   }
 }
 
@@ -588,11 +746,100 @@ async function discardDraft() {
   } catch { /* 拦截器已提示 */ }
 }
 
+// ---------- 考试科目/考核项建议 ----------
+
+function planQuestionCount(plan) {
+  return (plan.subjects || []).reduce((total, s) => total + (s.question_count || 0), 0)
+}
+
+function planItemsText(items) {
+  return (items || [])
+    .map((item) => `${typeLabel(item.type)} ${item.count}×${item.score}分`)
+    .join(' · ')
+}
+
+function planDescription(plan) {
+  const lines = [`AI 考试建议：${plan.title}`]
+  if (plan.summary) lines.push(plan.summary)
+  ;(plan.subjects || []).forEach((s, i) => {
+    const kp = (s.kp_names || []).length ? `（${s.kp_names.join('、')}）` : ''
+    lines.push(`${i + 1}. ${s.subject}${kp}：${planItemsText(s.items)}`)
+  })
+  return lines.join('\n')
+}
+
+function openPlan() {
+  Object.assign(planForm, { duration_minutes: 90, total_score: 100 })
+  planVisible.value = true
+}
+
+async function generatePlan() {
+  generatingPlan.value = true
+  try {
+    const data = await examApi.createExamPlanDraft(courseId.value, {
+      duration_minutes: planForm.duration_minutes,
+      total_score: planForm.total_score,
+    })
+    planVisible.value = false
+    currentPlan.value = data
+    planPreviewVisible.value = true
+    loadPlans()
+  } catch { /* 拦截器已提示 */ } finally {
+    generatingPlan.value = false
+  }
+}
+
+function openPlanPreview(row) {
+  currentPlan.value = row
+  planPreviewVisible.value = true
+}
+
+async function adoptPlan(row) {
+  try {
+    await ElMessageBox.confirm(
+      `采纳后「${row.plan.title}」将成为本课程考试配置（不会自动组卷或发布）。`,
+      '采纳考试建议',
+      { type: 'warning' },
+    )
+  } catch { return }
+  adoptingPlan.value = true
+  try {
+    const data = await examApi.adoptExamPlanDraft(row.id)
+    currentPlan.value = data
+    ElMessage.success('已采纳，可在新建试卷时参考')
+    loadPlans()
+  } catch { /* 拦截器已提示 */ } finally {
+    adoptingPlan.value = false
+  }
+}
+
+async function discardPlan(row) {
+  try {
+    await ElMessageBox.confirm('丢弃后该建议不再作为考试配置使用，确定丢弃？', '丢弃建议', { type: 'warning' })
+  } catch { return }
+  try {
+    await examApi.discardExamPlanDraft(row.id)
+    ElMessage.success('已丢弃')
+    if (currentPlan.value?.id === row.id) planPreviewVisible.value = false
+    loadPlans()
+  } catch { /* 拦截器已提示 */ }
+}
+
+function usePlanForExam(row) {
+  planPreviewVisible.value = false
+  openExam()
+  examForm.title = row.plan.title
+  examForm.duration_minutes = row.plan.duration_minutes
+  examForm.description = planDescription(row.plan)
+  ElMessage.info('已带入建议标题、时长与组卷说明，请选择题目后保存')
+}
+
 // ---------- 试卷 ----------
 
 function openExam() {
   Object.assign(examForm, {
-    title: '', class_id: null, duration_minutes: 60, due_days: 7, perScore: 5, publish: true,
+    title: '', description: '', class_id: null, duration_minutes: 60, due_days: 7,
+    perScore: 5, publish: true,
   })
   picked.value = []
   examVisible.value = true
@@ -612,6 +859,7 @@ async function saveExam() {
       title: examForm.title.trim(),
       course_id: courseId.value,
       class_id: examForm.class_id || null,
+      description: examForm.description || null,
       duration_minutes: examForm.duration_minutes,
       due_days: examForm.due_days,
       questions: picked.value.map((q) => ({ question_id: q.id, score: examForm.perScore })),
@@ -627,7 +875,10 @@ async function saveExam() {
 
 async function publishExam(row) {
   try {
-    await examApi.publishExam(row.id)
+    await ElMessageBox.confirm('发布后学生将收到通知并可开始作答，确定发布？', '发布试卷', { type: 'warning' })
+  } catch { return }
+  try {
+    await examApi.publishExam(row.id, true)
     ElMessage.success('已发布')
     loadExams()
   } catch { /* 拦截器已提示 */ }
@@ -638,7 +889,7 @@ async function closeExam(row) {
     await ElMessageBox.confirm('关闭后学生不能再提交，并会展示答案与解析，确定关闭？', '关闭试卷', { type: 'warning' })
   } catch { return }
   try {
-    await examApi.closeExam(row.id)
+    await examApi.closeExam(row.id, true)
     ElMessage.success('已关闭')
     loadExams()
   } catch { /* 拦截器已提示 */ }
@@ -717,6 +968,8 @@ async function confirmGrade() {
 .draft-item__stem { color: var(--text-primary); }
 .draft-item__meta { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-xs); margin: 4px 0 0 24px; }
 .draft-item__options { display: flex; flex-wrap: wrap; gap: var(--sp-3); margin: 4px 0 0 24px; font-size: var(--fs-xs); color: var(--text-secondary); }
+.plan-preview { display: flex; flex-direction: column; gap: var(--sp-2); }
+.plan-meta { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .pick { width: 100%; }
 .pick__hint { margin-bottom: var(--sp-1); font-size: var(--fs-xs); color: var(--text-secondary); }
 .grade { display: flex; flex-direction: column; gap: var(--sp-3); }

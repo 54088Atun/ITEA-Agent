@@ -34,6 +34,10 @@ export const studentApi = {
   interviewRecords(courseId) {
     return http.get('/student/interview/records', { params: { course_id: courseId } })
   },
+  /** 切换本人面试记录的分享范围：private（仅自己）/ teacher（授权教师） */
+  updateInterviewVisibility(id, visibility) {
+    return http.patch(`/student/interview/records/${id}/visibility`, { visibility })
+  },
   /** 持久化通知列表与未读数 */
   notifications(params = {}) {
     return http.get('/student/notifications', { params })
@@ -74,8 +78,12 @@ export const studentApi = {
   },
   /** 提交作业 → {id, assignment_id, state, submitted_at} */
   submitAssignment(id, data) {
-    // {content, attachment_url?}
+    // {content, attachment_url?, draft?}
     return http.post(`/student/assignments/${id}/submit`, data)
+  },
+  /** 保存学生私有草稿，不进入教师待批列表 */
+  saveAssignmentDraft(id, data) {
+    return http.post(`/student/assignments/${id}/submit`, { ...data, draft: true })
   },
 }
 

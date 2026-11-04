@@ -69,7 +69,7 @@
         </section>
 
         <section v-if="detail.my_submission" class="block">
-          <h4 class="block__title">我的提交</h4>
+          <h4 class="block__title">{{ detail.state === 'draft' ? '我的草稿' : '我的提交' }}</h4>
           <div class="block__text">{{ detail.my_submission.content }}</div>
         </section>
 
@@ -83,7 +83,14 @@
         </section>
 
         <el-alert
-          v-else-if="detail.my_submission"
+          v-if="detail.state === 'draft'"
+          type="info"
+          :closable="false"
+          show-icon
+          title="草稿仅自己可见，尚未进入教师待批列表"
+        />
+        <el-alert
+          v-else-if="detail.my_submission && !detail.my_submission.confirmed"
           type="warning"
           :closable="false"
           show-icon
@@ -99,12 +106,15 @@
         <div class="detail__actions">
           <el-button
             type="primary"
-            :disabled="detail.due_passed || detail.state === 'graded'"
+            :disabled="detail.state === 'graded' || (detail.due_passed && !detail.allow_late)"
             @click="openSubmit"
           >
-            {{ detail.my_submission ? '重新提交' : '提交作业' }}
+            {{ detail.state === 'draft' ? '继续作答' : (detail.my_submission ? '重新提交' : '提交作业') }}
           </el-button>
-          <span v-if="detail.due_passed" class="dim">已过截止时间，无法提交</span>
+          <span v-if="detail.due_passed && detail.allow_late" class="dim">
+            教师已开放补交，可正式提交；截止后不能保存草稿
+          </span>
+          <span v-else-if="detail.due_passed" class="dim">已过截止时间，无法提交</span>
         </div>
       </div>
     </el-drawer>
@@ -117,10 +127,15 @@
         :rows="8"
         placeholder="请输入你的作答内容"
       />
-      <p class="hint">提交后可在截止前修改；教师确认评分后不可再改。</p>
+      <p class="hint">草稿仅自己可见；正式提交后待教师确认评分，且不能再回退为草稿。</p>
       <template #footer>
         <el-button @click="submitVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="doSubmit">提交</el-button>
+        <el-button
+          :disabled="detail.due_passed"
+          :loading="submitting"
+          @click="doSubmit(true)"
+        >保存草稿</el-button>
+        <el-button type="primary" :loading="submitting" @click="doSubmit(false)">正式提交</el-button>
       </template>
     </el-dialog>
   </div>
@@ -160,6 +175,7 @@ function formatTime(t) {
 function stateLabel(s) {
   return {
     not_submitted: '未提交',
+    draft: '草稿',
     pending_review: '待教师确认',
     graded: '已批改',
     overdue: '已逾期',
@@ -169,6 +185,7 @@ function stateLabel(s) {
 function stateTag(s) {
   return {
     not_submitted: 'info',
+    draft: 'info',
     pending_review: 'warning',
     graded: 'success',
     overdue: 'danger',
@@ -191,12 +208,17 @@ function openSubmit() {
   submitVisible.value = true
 }
 
-async function doSubmit() {
+async function doSubmit(draft = false) {
   if (!answer.value.trim()) return ElMessage.warning('请输入作答内容')
   submitting.value = true
   try {
-    await studentApi.submitAssignment(detail.value.id, { content: answer.value.trim() })
-    ElMessage.success('提交成功，等待教师确认评分')
+    const data = { content: answer.value.trim() }
+    if (draft) {
+      await studentApi.saveAssignmentDraft(detail.value.id, data)
+    } else {
+      await studentApi.submitAssignment(detail.value.id, { ...data, draft: false })
+    }
+    ElMessage.success(draft ? '草稿已保存，仅自己可见' : '提交成功，等待教师确认评分')
     submitVisible.value = false
     await openDetail({ id: detail.value.id })
     load()

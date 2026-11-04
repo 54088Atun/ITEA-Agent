@@ -5,7 +5,7 @@
 - 左侧历史列表按用户隔离,支持重命名与软删除
 """
 from sqlalchemy import (
-    Column, BigInteger, String, Text, Integer, DateTime, ForeignKey, func,
+    Column, BigInteger, String, Text, Integer, Boolean, DateTime, ForeignKey, func,
 )
 from app.db.session import Base
 
@@ -21,6 +21,15 @@ class Conversation(Base):
     title = Column(String(120), nullable=False, default="新对话")
     branch = Column(String(20), comment="teacher/tutor/review/interview/admin")
     course_id = Column(BigInteger, ForeignKey("courses.id"), nullable=True)
+    is_favorite = Column(
+        Boolean, nullable=False, default=False, server_default="0",
+        comment="是否收藏",
+    )
+    summary = Column(Text, nullable=True, comment="会话摘要(缓存)")
+    summarized_at = Column(DateTime, nullable=True, comment="摘要生成时间")
+    security_level = Column(
+        String(20), nullable=True, comment="人工信息分级覆盖;空值恢复自动判定",
+    )
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), index=True)
     deleted_at = Column(DateTime, nullable=True)
@@ -35,4 +44,8 @@ class ChatMessage(Base):
     )
     role = Column(String(20), nullable=False, comment="user/assistant/system")
     content = Column(Text, nullable=False)
+    request_id = Column(
+        String(64), nullable=True, index=True,
+        comment="前端幂等键，用于断线续答/重试去重",
+    )
     created_at = Column(DateTime, server_default=func.now(), index=True)

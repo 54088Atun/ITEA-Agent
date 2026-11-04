@@ -100,6 +100,8 @@ def start_scheduler():
 
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
+        from app.core.config import settings
+        from app.services.storage_cleanup import cleanup_uploads_task
 
         scheduler = BackgroundScheduler()
         # 每 5 分钟扫描一次到期复习计划
@@ -110,9 +112,21 @@ def start_scheduler():
             id="review_reminder",
             replace_existing=True,
         )
+        # 每日定时清理超期上传文件
+        scheduler.add_job(
+            cleanup_uploads_task,
+            "cron",
+            hour=settings.CLEANUP_HOUR,
+            minute=settings.CLEANUP_MINUTE,
+            id="cleanup_uploads",
+            replace_existing=True,
+        )
         scheduler.start()
         _scheduler_started = True
-        logger.info("提醒调度器已启动(每 5 分钟扫描到期复习计划)")
+        logger.info(
+            "提醒调度器已启动(每 5 分钟扫描复习计划;每日 %02d:%02d 清理上传文件)",
+            settings.CLEANUP_HOUR, settings.CLEANUP_MINUTE,
+        )
     except Exception as e:
         logger.error("调度器启动失败(提醒功能降级): %s", e)
 

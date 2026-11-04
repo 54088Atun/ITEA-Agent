@@ -17,6 +17,10 @@ class InterviewAssignment(Base):
     title = Column(String(120), nullable=False)
     description = Column(Text)
     due_at = Column(DateTime, nullable=True)
+    duration_minutes = Column(
+        Integer, nullable=False, default=30, server_default="30",
+        comment="面试时长(分钟),1-120",
+    )
     status = Column(
         String(20), nullable=False, default="active", server_default="active",
         comment="active/closed",

@@ -32,9 +32,21 @@
         <el-icon><Document /></el-icon>
         <span>日志审计</span>
       </el-menu-item>
+      <el-menu-item index="/admin/agent-runs">
+        <el-icon><DataLine /></el-icon>
+        <span>运行回放</span>
+      </el-menu-item>
       <el-menu-item index="/admin/config">
         <el-icon><Tools /></el-icon>
         <span>系统配置</span>
+      </el-menu-item>
+      <el-menu-item index="/admin/site-content">
+        <el-icon><EditPen /></el-icon>
+        <span>站点内容</span>
+      </el-menu-item>
+      <el-menu-item index="/contact">
+        <el-icon><Service /></el-icon>
+        <span>联系我们</span>
       </el-menu-item>
       <el-sub-menu index="workspace">
         <template #title>
