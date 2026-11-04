@@ -26,9 +26,10 @@ backend/uploads/
 backend/knowledge_base/index/
 *.log
 
-# ===== IDE =====
+# ===== IDE 与本地 Agent 工作区 =====
 .idea/
 .vscode/
+.trae/
 *.swp
 
 # ===== 系统 =====
