@@ -18,17 +18,23 @@ from sqlalchemy.pool import StaticPool
 
 import app.api.assignments as assignments_api
 from app.api.assignments import (
-    ai_grade_submission, confirm_grade, create_assignment, get_my_assignment,
+    ai_grade_submission, batch_publish_assignments, confirm_grade,
+    create_assignment, get_my_assignment, give_student_feedback,
     list_assignments, list_my_assignments, publish_assignment,
-    submit_assignment,
+    publish_course_announcement, remind_assignment, submit_assignment,
 )
 from app.db.session import Base
 from app.models.assignment import Assignment, Submission
-from app.models.classroom import ClassMember, Classroom, CourseEnrollment
+from app.models.classroom import (
+    ClassAnnouncement, ClassMember, Classroom, CourseEnrollment,
+)
 from app.models.course import Course
+from app.models.notification import Notification, NotificationPreference
 from app.models.user import User
 from app.schemas.assignment import (
-    AssignmentCreate, GradeConfirmRequest, SubmissionCreate,
+    AssignmentBatchPublishRequest, AssignmentCreate, AssignmentRemindRequest,
+    CourseAnnouncementRequest, GradeConfirmRequest, StudentFeedbackRequest,
+    SubmissionCreate,
 )
 
 
@@ -77,12 +83,36 @@ def test_teacher_cannot_publish_to_others_course(db):
     assert exc.value.status_code == 403
 
 
+def test_assignment_requires_course_binding(db):
+    """决策 #8:作业必须绑定课程,不能只挂班级"""
+    with pytest.raises(HTTPException) as exc:
+        create_assignment(
+            AssignmentCreate(title="无课程作业", class_id=20), db.get(User, 1), db,
+        )
+    assert exc.value.status_code == 400
+    assert "课程" in exc.value.detail
+
+
+def test_assignment_class_must_belong_to_course(db):
+    db.add(Course(id=11, teacher_id=1, name="另一门课", code="ST102",
+                  audit_status="approved"))
+    db.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        create_assignment(
+            AssignmentCreate(title="错配作业", course_id=11, class_id=20),
+            db.get(User, 1), db,
+        )
+    assert exc.value.status_code == 400
+    assert "班级" in exc.value.detail
+
+
 def test_draft_invisible_until_published(db):
     assignment = _publish(db, course_id=10, publish=False)
     student = db.get(User, 3)
     assert list_my_assignments(student, db) == []
 
-    publish_assignment(assignment.id, db.get(User, 1), db)
+    publish_assignment(assignment.id, db.get(User, 1), db, confirm=True)
     rows = list_my_assignments(student, db)
     assert [r["id"] for r in rows] == [assignment.id]
     assert rows[0]["state"] == "not_submitted"
@@ -181,3 +211,327 @@ def test_teacher_detail_counts_pending(db):
     detail = assignments_api.get_assignment(assignment.id, db.get(User, 1), db)
     assert detail["submissions"][0]["student_name"] == "小明"
     assert detail["submissions"][0]["confirmed"] is False
+
+
+def test_submission_draft_is_private_and_not_pending(db, monkeypatch):
+    assignment = _publish(db, course_id=10, due_days=3)
+    student = db.get(User, 3)
+    teacher = db.get(User, 1)
+
+    result = submit_assignment(
+        assignment.id, SubmissionCreate(content="私有草稿", draft=True), student, db,
+    )
+    assert result["state"] == "draft"
+    assert result["submitted_at"] is None
+
+    detail = get_my_assignment(assignment.id, student, db)
+    assert detail["allow_late"] is False
+    assert detail["state"] == "draft"
+    assert detail["my_submission"]["status"] == "draft"
+    assert detail["my_submission"]["content"] == "私有草稿"
+    assert detail["my_submission"]["submitted_at"] is None
+    assert list_my_assignments(student, db)[0]["state"] == "draft"
+
+    teacher_row = list_assignments(teacher, db)[0]
+    assert teacher_row["submission_count"] == 0
+    assert teacher_row["pending_count"] == 0
+    assert assignments_api.get_assignment(assignment.id, teacher, db)["submissions"] == []
+
+    async def fake_grade(*args, **kwargs):
+        return {"score": 80, "feedback": "不应批改草稿", "source": "rule"}
+
+    monkeypatch.setattr(assignments_api, "grade_submission", fake_grade)
+    sub = db.query(Submission).filter_by(assignment_id=assignment.id).one()
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(ai_grade_submission(sub.id, teacher, db))
+    assert exc.value.status_code == 400
+
+
+def test_formal_submission_uses_submitted_at_with_legacy_fallback(db):
+    assignment = _publish(db, course_id=10, due_days=3)
+    student = db.get(User, 3)
+    teacher = db.get(User, 1)
+    submit_assignment(
+        assignment.id, SubmissionCreate(content="先存草稿", draft=True), student, db,
+    )
+    sub = db.query(Submission).filter_by(assignment_id=assignment.id).one()
+    sub.created_at = datetime(2020, 1, 1, 8, 0, 0)
+    db.commit()
+
+    before = datetime.utcnow()
+    result = submit_assignment(
+        assignment.id, SubmissionCreate(content="正式作答"), student, db,
+    )
+    after = datetime.utcnow()
+    assert sub.status == "submitted"
+    assert before <= sub.submitted_at <= after
+    assert result["submitted_at"] == sub.submitted_at
+    assert get_my_assignment(
+        assignment.id, student, db,
+    )["my_submission"]["submitted_at"] == sub.submitted_at
+    teacher_detail = assignments_api.get_assignment(assignment.id, teacher, db)
+    assert teacher_detail["submissions"][0]["submitted_at"] == sub.submitted_at
+
+    sub.submitted_at = None
+    db.commit()
+    assert get_my_assignment(
+        assignment.id, student, db,
+    )["my_submission"]["submitted_at"] == sub.created_at
+
+
+@pytest.mark.parametrize("draft", [True, False])
+def test_due_rejects_draft_and_formal_submission_by_default(db, draft):
+    assignment = _publish(db, course_id=10, due_days=1)
+    assignment.due_at = datetime.utcnow() - timedelta(minutes=1)
+    db.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        submit_assignment(
+            assignment.id,
+            SubmissionCreate(content="截止后内容", draft=draft),
+            db.get(User, 3), db,
+        )
+    assert exc.value.status_code == 400
+    assert "截止" in exc.value.detail
+
+
+def test_teacher_can_allow_late_formal_submission_but_not_late_draft(db):
+    assignment = _publish(db, course_id=10, due_days=1)
+    assignment.due_at = datetime.utcnow() - timedelta(minutes=1)
+    db.commit()
+    teacher = db.get(User, 1)
+    student = db.get(User, 3)
+
+    with pytest.raises(HTTPException) as exc:
+        assignments_api.set_allow_late(assignment.id, True, db.get(User, 2), db)
+    assert exc.value.status_code == 403
+
+    result = assignments_api.set_allow_late(assignment.id, True, teacher, db)
+    assert result["allow_late"] is True
+    assert get_my_assignment(assignment.id, student, db)["allow_late"] is True
+
+    with pytest.raises(HTTPException) as exc:
+        submit_assignment(
+            assignment.id, SubmissionCreate(content="迟到草稿", draft=True), student, db,
+        )
+    assert exc.value.status_code == 400
+
+    submitted = submit_assignment(
+        assignment.id, SubmissionCreate(content="允许补交"), student, db,
+    )
+    assert submitted["state"] == "pending_review"
+    assert submitted["submitted_at"] is not None
+
+
+def test_formal_submission_cannot_revert_to_draft(db):
+    assignment = _publish(db, course_id=10, due_days=3)
+    student = db.get(User, 3)
+    submit_assignment(assignment.id, SubmissionCreate(content="正式作答"), student, db)
+    sub = db.query(Submission).filter_by(assignment_id=assignment.id).one()
+    submitted_at = sub.submitted_at
+
+    with pytest.raises(HTTPException) as exc:
+        submit_assignment(
+            assignment.id, SubmissionCreate(content="试图回退", draft=True), student, db,
+        )
+    assert exc.value.status_code == 400
+    assert sub.status == "submitted"
+    assert sub.content == "正式作答"
+    assert sub.submitted_at == submitted_at
+
+
+def test_closed_assignment_forbids_draft_and_late_submission(db):
+    assignment = _publish(db, course_id=10, due_days=3, allow_late=True)
+    assignment.status = "closed"
+    db.commit()
+    student = db.get(User, 3)
+
+    for draft in (True, False):
+        with pytest.raises(HTTPException) as exc:
+            submit_assignment(
+                assignment.id, SubmissionCreate(content="关闭后内容", draft=draft), student, db,
+            )
+        assert exc.value.status_code == 400
+        assert "关闭" in exc.value.detail
+
+
+def test_records_exclude_drafts_and_use_formal_submission_time(db):
+    from app.api.records import student_records, teacher_publish_records
+
+    assignment = _publish(db, course_id=10, due_days=3)
+    student = db.get(User, 3)
+    teacher = db.get(User, 1)
+    submit_assignment(
+        assignment.id, SubmissionCreate(content="私有草稿", draft=True), student, db,
+    )
+
+    assert [e for e in student_records(80, student, db) if e["type"] == "assignment"] == []
+    teacher_row = teacher_publish_records(None, 50, teacher, db)[0]
+    assert teacher_row["submission_count"] == 0
+    assert teacher_row["pending_count"] == 0
+
+    submit_assignment(assignment.id, SubmissionCreate(content="正式作答"), student, db)
+    sub = db.query(Submission).filter_by(assignment_id=assignment.id).one()
+    events = [e for e in student_records(80, student, db) if e["type"] == "assignment"]
+    assert len(events) == 1
+    assert events[0]["created_at"] == sub.submitted_at.isoformat()
+    teacher_row = teacher_publish_records(None, 50, teacher, db)[0]
+    assert teacher_row["submission_count"] == 1
+    assert teacher_row["pending_count"] == 1
+
+
+def test_batch_publish_preview_confirm_and_skips(db):
+    draft_a = _publish(db, course_id=10, publish=False)
+    draft_b = _publish(db, course_id=10, title="第二次作业", publish=False)
+    published = _publish(db, course_id=10, title="已发布作业")
+    foreign = Assignment(teacher_id=2, course_id=10, title="别人的作业", status="draft")
+    db.add(foreign)
+    db.commit()
+    db.query(Notification).delete()
+    db.commit()
+    teacher = db.get(User, 1)
+
+    preview = batch_publish_assignments(
+        AssignmentBatchPublishRequest(assignment_ids=[draft_a.id, draft_b.id, draft_a.id]),
+        teacher, db,
+    )
+    assert preview.dry_run is True
+    assert preview.affected == [draft_a.id, draft_b.id]  # 重复 id 去重
+    assert db.get(Assignment, draft_a.id).status == "draft"
+    assert db.query(Notification).count() == 0
+
+    with pytest.raises(HTTPException) as exc:
+        batch_publish_assignments(
+            AssignmentBatchPublishRequest(assignment_ids=[draft_a.id], dry_run=False),
+            teacher, db, confirm=False,
+        )
+    assert exc.value.status_code == 428
+
+    result = batch_publish_assignments(
+        AssignmentBatchPublishRequest(assignment_ids=[draft_a.id, draft_b.id], dry_run=False),
+        teacher, db, confirm=True,
+    )
+    assert result.affected == [draft_a.id, draft_b.id]
+    assert db.get(Assignment, draft_a.id).status == "published"
+    assert db.get(Assignment, draft_b.id).status == "published"
+    notes = db.query(Notification).filter_by(user_id=3, source_type="assignment").all()
+    assert sorted(n.source_id for n in notes) == sorted([str(draft_a.id), str(draft_b.id)])
+
+    preview2 = batch_publish_assignments(
+        AssignmentBatchPublishRequest(assignment_ids=[published.id, 9999, foreign.id]),
+        teacher, db,
+    )
+    assert preview2.affected == []
+    assert {e.id: e.reason for e in preview2.skipped} == {
+        published.id: "作业已发布",
+        foreign.id: "只能操作自己发布的作业",
+    }
+    assert [(e.id, e.reason) for e in preview2.failed] == [(9999, "作业不存在")]
+
+
+def test_remind_targets_unsubmitted_students(db):
+    assignment = _publish(db, course_id=10, due_days=3)
+    db.query(Notification).delete()  # 清掉 _publish 自动写入的通知
+    db.commit()
+    teacher = db.get(User, 1)
+
+    preview = remind_assignment(assignment.id, AssignmentRemindRequest(), teacher, db)
+    assert preview.dry_run is True
+    assert preview.affected == [3]
+    assert db.query(Notification).count() == 0
+
+    result = remind_assignment(
+        assignment.id, AssignmentRemindRequest(dry_run=False, message="请尽快提交"), teacher, db,
+    )
+    assert result.affected == [3]
+    notes = db.query(Notification).filter_by(user_id=3, category="assignment").all()
+    assert len(notes) == 1
+    assert notes[0].message == "请尽快提交"
+
+    submit_assignment(assignment.id, SubmissionCreate(content="已提交"), db.get(User, 3), db)
+    assert remind_assignment(
+        assignment.id, AssignmentRemindRequest(), teacher, db,
+    ).affected == []
+
+
+def test_remind_skips_students_with_disabled_category(db):
+    assignment = _publish(db, course_id=10, due_days=3)
+    db.query(Notification).delete()
+    db.add(NotificationPreference(user_id=3, assignment_enabled=False))
+    db.commit()
+
+    result = remind_assignment(
+        assignment.id, AssignmentRemindRequest(dry_run=False), db.get(User, 1), db,
+    )
+    assert result.affected == []
+    assert [(e.id, e.reason) for e in result.skipped] == [(3, "学生已关闭作业通知")]
+
+
+def test_teacher_feedback_requires_submission_and_confirmation(db):
+    assignment = _publish(db, course_id=10, due_days=3)
+    teacher = db.get(User, 1)
+    student = db.get(User, 3)
+
+    with pytest.raises(HTTPException) as exc:
+        give_student_feedback(
+            3, StudentFeedbackRequest(assignment_id=assignment.id, score=90), teacher, db,
+        )
+    assert exc.value.status_code == 404
+
+    submit_assignment(
+        assignment.id, SubmissionCreate(content="草稿", draft=True), student, db,
+    )
+    with pytest.raises(HTTPException) as exc:
+        give_student_feedback(
+            3, StudentFeedbackRequest(assignment_id=assignment.id, score=90), teacher, db,
+        )
+    assert exc.value.status_code == 400
+
+    submit_assignment(assignment.id, SubmissionCreate(content="正式作答"), student, db)
+    with pytest.raises(HTTPException) as exc:
+        give_student_feedback(
+            3,
+            StudentFeedbackRequest(assignment_id=assignment.id, score=90, feedback="不错"),
+            teacher, db,
+        )
+    assert exc.value.status_code == 428
+
+    result = give_student_feedback(
+        3, StudentFeedbackRequest(assignment_id=assignment.id, score=90, feedback="不错"),
+        teacher, db, confirm=True,
+    )
+    assert result["score"] == 90 and result["feedback"] == "不错"
+    sub = db.query(Submission).filter_by(assignment_id=assignment.id).one()
+    assert sub.score == 90
+    assert sub.feedback == "不错"
+    assert sub.confirmed_at is not None
+    assert sub.confirmed_by == teacher.id
+
+
+def test_publish_course_announcement_to_course_classes(db):
+    result = publish_course_announcement(
+        10, CourseAnnouncementRequest(content="  下周停课一次  "), db.get(User, 1), db,
+    )
+    assert result["count"] == 1
+    assert result["announcements"][0]["class_id"] == 20
+    row = db.query(ClassAnnouncement).one()
+    assert row.content == "下周停课一次"
+    assert row.author_id == 1
+
+    with pytest.raises(HTTPException) as exc:
+        publish_course_announcement(
+            10, CourseAnnouncementRequest(content="   "), db.get(User, 1), db,
+        )
+    assert exc.value.status_code == 400
+
+    with pytest.raises(HTTPException) as exc:
+        publish_course_announcement(
+            10, CourseAnnouncementRequest(content="越权公告"), db.get(User, 2), db,
+        )
+    assert exc.value.status_code == 403
+
+    with pytest.raises(HTTPException) as exc:
+        publish_course_announcement(
+            999, CourseAnnouncementRequest(content="不存在"), db.get(User, 1), db,
+        )
+    assert exc.value.status_code == 404

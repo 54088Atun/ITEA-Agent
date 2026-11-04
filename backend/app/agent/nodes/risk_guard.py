@@ -41,6 +41,14 @@ GUIDE_TEMPLATES = {
         "3. 规划考前的复习时间表。\n\n"
         "[AI 辅助参考,请师生审核]"
     ),
+    "未截止作业答案保护": (
+        "这道题属于尚未截止的作业/考试,为保护考核公平,我不能直接给出标准答案。\n\n"
+        "可以这样帮您:\n"
+        "1. 把涉及的概念讲清楚,您再自己推导;\n"
+        "2. 用引导性问题帮您定位卡点;\n"
+        "3. 截止后我可以陪您复盘这道题。\n\n"
+        "[AI 辅助参考,请师生审核]"
+    ),
     "索要标准答案": (
         "这道题更适合通过引导来掌握。直接给标准答案不利于您真正理解知识点。\n\n"
         "我们可以这样推进:\n"
@@ -66,6 +74,10 @@ async def risk_guard_node(state: AgentState) -> dict:
     # 选择引导话术
     output = GUIDE_TEMPLATES.get(risk_type, DEFAULT_BLOCK_MSG)
 
+    # 命中未截止作业/考试时,把目标写入动作摘要,便于教师/管理员追溯
+    target = state.get("risk_target") or ""
+    action = f"拦截转引导({target})" if target else "拦截转引导"
+
     # 记录风控日志(独立会话,避免影响主请求事务)
     try:
         db = SessionLocal()
@@ -73,7 +85,7 @@ async def risk_guard_node(state: AgentState) -> dict:
             user_id=state["user_id"],
             request_content=latest_msg[:2000],
             risk_type=risk_type or "未知",
-            action_taken="拦截转引导",
+            action_taken=action[:50],
         )
         db.add(log)
         db.commit()

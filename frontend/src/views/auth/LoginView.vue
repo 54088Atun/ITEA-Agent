@@ -24,6 +24,11 @@
     <!-- 右侧表单区 -->
     <section class="auth__panel">
       <div class="auth__card">
+        <router-link to="/" class="auth__back">
+          <el-icon><ArrowLeft /></el-icon>
+          返回首页
+        </router-link>
+
         <header class="auth__card-head">
           <h2>{{ tab === 'login' ? '登录' : '创建账号' }}</h2>
           <p>{{ tab === 'login' ? '使用校园邮箱进入你的工作空间' : '注册后可直接进入对应身份的工作台' }}</p>
@@ -74,21 +79,24 @@
 
 <script setup>
 import { ref, reactive } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Message, Lock, User } from '@element-plus/icons-vue'
 import { useUserStore } from '../../stores/user'
 
+const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
 
-const tab = ref('login')
+// 首页双入口通过 query 预选身份与页签：?role=teacher&mode=register
+const initialRole = route.query.role === 'teacher' ? 'teacher' : 'student'
+const tab = ref(route.query.mode === 'register' ? 'register' : 'login')
 const loading = ref(false)
 const loginFormRef = ref()
 const regFormRef = ref()
 
 const loginForm = reactive({ email: '', password: '' })
-const regForm = reactive({ name: '', email: '', password: '', role: 'student' })
+const regForm = reactive({ name: '', email: '', password: '', role: initialRole })
 
 const loginRules = {
   email: [{ required: true, message: '请输入邮箱', trigger: 'blur' }, { type: 'email', message: '邮箱格式不正确', trigger: 'blur' }],
@@ -277,6 +285,18 @@ async function doRegister() {
   inset: 0 0 auto 0;
   height: 3px;
   background: var(--grad-brand);
+}
+.auth__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: var(--sp-4);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+  transition: color var(--dur-fast) var(--ease);
+}
+.auth__back:hover {
+  color: var(--color-primary);
 }
 .auth__card-head h2 {
   font-family: var(--font-serif);

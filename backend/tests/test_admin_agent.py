@@ -20,7 +20,7 @@ from app.core.deps import get_current_user, require_admin
 from app.core.security import create_access_token
 from app.db.session import Base
 from app.models.course import Course, CourseMaterial, KnowledgePoint
-from app.models.log import InteractionLog, RiskLog
+from app.models.log import AgentRun, AgentRunSpan, InteractionLog, RiskLog
 from app.models.user import User
 from app.schemas.agent import ChatRequest
 
@@ -90,17 +90,13 @@ def _stats_session():
     return engine, TestingSession
 
 
-def test_admin_prepare_skips_course_memory_and_rag(monkeypatch):
-    memory_load = MagicMock(return_value={"profile_snapshot": {"unexpected": True}})
-    rag_search = MagicMock(return_value={"context": "无关课程内容", "fragments": [{}]})
-    monkeypatch.setattr(agent_graph, "memory_load_node", memory_load)
-    monkeypatch.setattr(agent_graph, "rag_search", rag_search)
-
+def test_prepare_only_returns_visible_course_id():
+    """prepare 不再预加载学情/RAG,数据由各 Agent 运行时直接调用数据 API"""
     result = agent_graph.prepare_node(_state())
 
-    assert result == {"profile_snapshot": {}, "rag_context": "", "course_id": None}
-    memory_load.assert_not_called()
-    rag_search.assert_not_called()
+    assert result == {"course_id": None}
+    assert "profile_snapshot" not in result
+    assert "rag_context" not in result
 
 
 def test_admin_is_registered_and_routed_in_real_graph():
@@ -133,10 +129,9 @@ def test_admin_reflect_keeps_ai_tag_check(monkeypatch):
     assert "标识" in result["reflection_notes"]
 
 
-def test_admin_node_aggregates_read_only_stats_and_streams(monkeypatch):
+def test_admin_node_queries_data_via_tools_instead_of_snapshot(monkeypatch):
+    """P0-5:只读数据改由 admin.* 工具按需查询,节点不再预取平台快照"""
     admin_module = importlib.import_module("app.agent.nodes.admin")
-    engine, TestingSession = _stats_session()
-    monkeypatch.setattr(admin_module, "SessionLocal", TestingSession)
     captured = {}
 
     async def fake_llm(messages, sink=None):
@@ -146,25 +141,20 @@ def test_admin_node_aggregates_read_only_stats_and_streams(monkeypatch):
 
     monkeypatch.setattr(admin_module, "llm_invoke", fake_llm)
     queue = asyncio.Queue()
-    try:
-        result = asyncio.run(admin_module.admin_node(_state(stream_queue=queue)))
 
-        assert result["final_output"] == f"平台只读解读\n\n{AI_TAG}"
-        assert queue.get_nowait() == ("token", "平台只读解读")
-        assert "observer" in captured["prompt"]
-        assert '"student": 2' in captured["prompt"]
-        assert '"pending": 1' in captured["prompt"]
-        assert '"knowledge_points": 2' in captured["prompt"]
-        assert '"materials": 1' in captured["prompt"]
-        assert '"risk_logs": 1' in captured["prompt"]
-        assert '"interaction_logs": 2' in captured["prompt"]
-    finally:
-        engine.dispose()
+    result = asyncio.run(admin_module.admin_node(_state(stream_queue=queue)))
+
+    assert result["final_output"] == f"平台只读解读\n\n{AI_TAG}"
+    assert queue.get_nowait() == ("token", "平台只读解读")
+    assert "observer" in captured["prompt"]
+    # 工具目录进入提示词,旧快照字段不再预置
+    assert "admin.course_list" in captured["prompt"]
+    assert "admin.material_stats" in captured["prompt"]
+    assert '"knowledge_points"' not in captured["prompt"]
 
 
 def test_admin_node_llm_failure_has_explicit_fallback(monkeypatch):
     admin_module = importlib.import_module("app.agent.nodes.admin")
-    monkeypatch.setattr(admin_module, "_load_platform_stats", lambda: {"users_by_role": {}})
 
     async def fail_llm(messages, sink=None):
         raise RuntimeError("model unavailable")
@@ -178,10 +168,6 @@ def test_admin_node_llm_failure_has_explicit_fallback(monkeypatch):
 
 def test_real_admin_graph_streams_branch_token_and_done(monkeypatch):
     admin_module = importlib.import_module("app.agent.nodes.admin")
-    monkeypatch.setattr(
-        admin_module, "_load_platform_stats",
-        lambda: {"users_by_role": {"admin": 1}},
-    )
     captured = {}
 
     async def fake_llm(messages, sink=None):
@@ -208,8 +194,9 @@ def test_real_admin_graph_streams_branch_token_and_done(monkeypatch):
     types = [event["type"] for event in events]
 
     assert "admin" in chat_api.ANSWER_NODES
-    assert types[0] == "branch"
-    assert events[0]["data"] == {"branch": "admin", "intent": "chat"}
+    assert types[0] == "run"
+    assert types[1] == "branch"
+    assert events[1]["data"] == {"branch": "admin", "intent": "chat"}
     assert "token" in types
     assert types[-1] == "done"
     assert "只读回答" in "".join(
@@ -299,3 +286,91 @@ def test_admin_chat_access_through_real_dependency_chain(
                 require_admin(get_current_user(token=token, db=db))
             assert exc_info.value.status_code == expected_status
     engine.dispose()
+
+
+def test_admin_agent_run_trace_missing_run_returns_404():
+    engine = create_engine("sqlite:///:memory:", poolclass=StaticPool)
+    Base.metadata.create_all(
+        engine, tables=[AgentRun.__table__, AgentRunSpan.__table__],
+    )
+    TestingSession = sessionmaker(bind=engine)
+    try:
+        with TestingSession() as db:
+            with pytest.raises(HTTPException) as exc_info:
+                admin_api.admin_agent_run_trace(
+                    run_id=999,
+                    admin=SimpleNamespace(id=1, role="admin"),
+                    db=db,
+                )
+            assert exc_info.value.status_code == 404
+    finally:
+        engine.dispose()
+
+
+def test_admin_agent_run_trace_returns_empty_when_no_spans():
+    engine = create_engine("sqlite:///:memory:", poolclass=StaticPool)
+    Base.metadata.create_all(
+        engine, tables=[AgentRun.__table__, AgentRunSpan.__table__],
+    )
+    TestingSession = sessionmaker(bind=engine)
+    try:
+        with TestingSession() as db:
+            db.add(AgentRun(
+                id=1, user_id=2, session_id="s1", role="admin",
+                branch="admin", status="success",
+            ))
+            db.commit()
+
+            result = admin_api.admin_agent_run_trace(
+                run_id=1,
+                admin=SimpleNamespace(id=1, role="admin"),
+                db=db,
+            )
+
+            assert result == {"run_id": 1, "spans": []}
+    finally:
+        engine.dispose()
+
+
+def test_admin_agent_run_trace_orders_spans_by_seq():
+    engine = create_engine("sqlite:///:memory:", poolclass=StaticPool)
+    Base.metadata.create_all(
+        engine, tables=[AgentRun.__table__, AgentRunSpan.__table__],
+    )
+    TestingSession = sessionmaker(bind=engine)
+    try:
+        with TestingSession() as db:
+            db.add(AgentRun(
+                id=1, user_id=2, session_id="s1", role="admin",
+                branch="admin", status="error",
+            ))
+            db.add_all([
+                AgentRunSpan(
+                    run_id=1, seq=2, kind="tool", name="stats.read",
+                    status="error", payload='{"x":1}', result='{"ok":false}',
+                    tokens=12, duration_ms=30, error="boom",
+                ),
+                AgentRunSpan(
+                    run_id=1, seq=1, kind="route", name="router",
+                    status="ok", payload='{"branch":"admin"}',
+                    result='{"branch":"admin"}', tokens=5, duration_ms=10,
+                ),
+            ])
+            db.commit()
+
+            result = admin_api.admin_agent_run_trace(
+                run_id=1,
+                admin=SimpleNamespace(id=1, role="admin"),
+                db=db,
+            )
+
+            assert result["run_id"] == 1
+            spans = result["spans"]
+            assert [s["seq"] for s in spans] == [1, 2]
+            assert spans[0]["kind"] == "route"
+            assert spans[1]["status"] == "error"
+            assert spans[1]["error"] == "boom"
+            assert spans[1]["tokens"] == 12
+            assert spans[1]["duration_ms"] == 30
+    finally:
+        engine.dispose()

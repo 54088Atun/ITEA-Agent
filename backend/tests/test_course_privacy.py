@@ -8,6 +8,7 @@
 - 教师不能把他人课程绑定到自己的班级
 """
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -15,9 +16,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.api import course as course_api
 from app.api.classroom import create_class, join_class, leave_class
 from app.api.course import get_course, list_courses, list_knowledge_points, list_materials
 from app.api.student import enroll_course
+from app.services import course_access
 from app.db.session import Base
 from app.models.classroom import Classroom, ClassMember, CourseEnrollment
 from app.models.course import Course, CourseMaterial, KnowledgePoint
@@ -46,6 +49,8 @@ def seed(db):
                    password_hash="x", status="active")
     outsider = User(id=4, role="student", name="小红", email="s2@example.com",
                     password_hash="x", status="active")
+    admin = User(id=5, role="admin", name="管理员", email="admin@example.com",
+                 password_hash="x", status="active")
     course = Course(id=10, teacher_id=1, name="软件测试", code="ST101",
                     audit_status="approved")
     other_course = Course(id=11, teacher_id=2, name="Web 开发", code="WEB101",
@@ -53,7 +58,7 @@ def seed(db):
     material = CourseMaterial(id=20, course_id=10, type="courseware", title="第一章",
                               file_path="/tmp/ch1.pdf")
     kp = KnowledgePoint(id=30, course_id=10, name="等价类划分")
-    db.add_all([teacher, other, student, outsider, course, other_course, material, kp])
+    db.add_all([teacher, other, student, outsider, admin, course, other_course, material, kp])
     db.commit()
 
 
@@ -165,3 +170,78 @@ def test_multiple_classes_keep_visibility_until_last(db):
     assert list_courses(student, db) == []
     assert db.query(ClassMember).filter_by(student_id=3).count() == 2
     assert db.query(Classroom).count() == 2
+
+
+def test_course_collaborator_management_requires_owner_or_admin(db):
+    owner = db.get(User, 1)
+    collaborator = db.get(User, 2)
+    admin = db.get(User, 5)
+    req = SimpleNamespace(teacher_id=collaborator.id)
+
+    with pytest.raises(HTTPException) as exc:
+        course_api.add_collaborator(10, req, collaborator, db)
+    assert exc.value.status_code == 403
+
+    created = course_api.add_collaborator(10, req, owner, db)
+    assert created["teacher_id"] == collaborator.id
+    assert [row["teacher_id"] for row in course_api.list_collaborators(10, owner, db)] == [2]
+
+    with pytest.raises(HTTPException) as exc:
+        course_api.remove_collaborator(10, collaborator.id, collaborator, db)
+    assert exc.value.status_code == 403
+
+    course_api.remove_collaborator(10, collaborator.id, admin, db)
+    assert course_api.list_collaborators(10, admin, db) == []
+    assert course_api.add_collaborator(10, req, admin, db)["teacher_id"] == 2
+
+
+def test_collaborator_target_is_teacher_and_grant_is_idempotent(db):
+    owner = db.get(User, 1)
+
+    with pytest.raises(HTTPException) as exc:
+        course_api.add_collaborator(10, SimpleNamespace(teacher_id=3), owner, db)
+    assert exc.value.status_code == 400
+    with pytest.raises(HTTPException) as exc:
+        course_api.add_collaborator(10, SimpleNamespace(teacher_id=1), owner, db)
+    assert exc.value.status_code == 400
+
+    req = SimpleNamespace(teacher_id=2)
+    first = course_api.add_collaborator(10, req, owner, db)
+    second = course_api.add_collaborator(10, req, owner, db)
+    assert second["id"] == first["id"]
+    assert len(course_api.list_collaborators(10, owner, db)) == 1
+
+
+def test_collaborator_visibility_is_revoked_with_grant(db):
+    owner = db.get(User, 1)
+    collaborator = db.get(User, 2)
+    assert {course.id for course in list_courses(collaborator, db)} == {11}
+
+    course_api.add_collaborator(10, SimpleNamespace(teacher_id=2), owner, db)
+    assert {course.id for course in list_courses(collaborator, db)} == {10, 11}
+    assert get_course(10, collaborator, db).id == 10
+
+    course_api.remove_collaborator(10, collaborator.id, owner, db)
+    assert {course.id for course in list_courses(collaborator, db)} == {11}
+    with pytest.raises(HTTPException) as exc:
+        get_course(10, collaborator, db)
+    assert exc.value.status_code == 403
+
+
+def test_collaborator_can_maintain_course_and_use_agent_scope(db, monkeypatch):
+    owner = db.get(User, 1)
+    collaborator = db.get(User, 2)
+    TestingSession = sessionmaker(bind=db.get_bind())
+    monkeypatch.setattr(course_access, "SessionLocal", TestingSession)
+    assert course_access.agent_course_scope_error(collaborator.id, 10) == "无权访问该课程"
+
+    course_api.add_collaborator(10, SimpleNamespace(teacher_id=2), owner, db)
+    assert course_access.agent_course_scope_error(collaborator.id, 10) is None
+    kp = course_api.add_knowledge_point(
+        10, name="协作知识点", description="联合维护", parent_id=None,
+        teacher=collaborator, db=db,
+    )
+    assert kp["name"] == "协作知识点"
+
+    course_api.remove_collaborator(10, collaborator.id, owner, db)
+    assert course_access.agent_course_scope_error(collaborator.id, 10) == "无权访问该课程"

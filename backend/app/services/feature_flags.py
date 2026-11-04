@@ -5,6 +5,7 @@
 from sqlalchemy.orm import Session
 
 from app.models.log import SystemConfig
+from app.services.capabilities import role_capabilities
 
 FEATURE_DEFAULTS = {
     "feature_image_vision": ("on", "图片识图开关(on/off)"),
@@ -13,6 +14,13 @@ FEATURE_DEFAULTS = {
     "feature_exams": ("on", "题库与在线考试开关(on/off)"),
     "upload_image_max_mb": ("8", "图片上传大小上限(MB,1-20)"),
     "vision_daily_limit": ("30", "每人每日识图上传次数上限(0 为不限)"),
+    "feature_asr": ("on", "语音识别开关(on/off)"),
+    "feature_content_moderation": ("on", "上传内容审核开关(on/off)"),
+    "moderation_keywords": ("", "自定义审核关键词(JSON,分类→词表,可选)"),
+    "asr_max_mb": ("10", "单次音频大小上限(MB,1-50)"),
+    "asr_max_seconds": ("300", "单次音频时长上限(秒,0 为不限)"),
+    "asr_daily_limit": ("50", "每人每日语音识别次数上限(0 为不限)"),
+    "asr_daily_seconds": ("1800", "每人每日语音识别总时长上限(秒,0 为不限)"),
 }
 
 _OFF_VALUES = {"off", "false", "0", "no", "disabled"}
@@ -39,15 +47,21 @@ def get_int(db: Session, key: str, default: int = 0) -> int:
             return default
 
 
-def public_features(db: Session) -> dict:
+def public_features(db: Session, role: str = "student") -> dict:
     """供前端读取的开关与限额(不含敏感配置)"""
     return {
+        "capabilities": role_capabilities(role),
         "feature_image_vision": is_enabled(db, "feature_image_vision"),
         "feature_assignments": is_enabled(db, "feature_assignments"),
         "feature_course_share": is_enabled(db, "feature_course_share"),
         "feature_exams": is_enabled(db, "feature_exams"),
         "upload_image_max_mb": max(1, min(get_int(db, "upload_image_max_mb", 8), 20)),
         "vision_daily_limit": max(0, get_int(db, "vision_daily_limit", 30)),
+        "feature_asr": is_enabled(db, "feature_asr"),
+        "asr_max_mb": max(1, min(get_int(db, "asr_max_mb", 10), 50)),
+        "asr_max_seconds": max(0, get_int(db, "asr_max_seconds", 300)),
+        "asr_daily_limit": max(0, get_int(db, "asr_daily_limit", 50)),
+        "asr_daily_seconds": max(0, get_int(db, "asr_daily_seconds", 1800)),
     }
 
 

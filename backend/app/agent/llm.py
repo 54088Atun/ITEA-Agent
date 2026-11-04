@@ -5,6 +5,8 @@
 - 启动时校验密钥非空,缺失则拒绝初始化
 """
 import logging
+from dataclasses import dataclass, field
+
 from langchain_openai import ChatOpenAI
 from app.core.config import settings
 
@@ -15,6 +17,21 @@ _llm_instance: ChatOpenAI | None = None
 # 单次调用上限:超过即抛超时,避免网络抖动时请求无限挂起、占满数据库连接池
 LLM_TIMEOUT_SECONDS = 90
 LLM_MAX_RETRIES = 1
+
+# 流式兜底:模型直接给出回答(未调工具)时,把完整文本切块推给前端,保留渐进渲染
+_STREAM_CHUNK_SIZE = 24
+
+
+@dataclass
+class ToolPlan:
+    """一次带工具的模型决策
+
+    content: 模型在调用工具前的说明文字(可能为空)
+    tool_calls: 待执行调用 [{"id", "name", "arguments"}]
+    """
+
+    content: str = ""
+    tool_calls: list[dict] = field(default_factory=list)
 
 
 def get_llm(temperature: float | None = None) -> ChatOpenAI:
@@ -40,7 +57,108 @@ def get_llm(temperature: float | None = None) -> ChatOpenAI:
     return _llm_instance
 
 
-async def llm_invoke(messages: list[dict], temperature: float | None = None, sink=None) -> str:
+def _to_lc_messages(messages: list[dict]):
+    """统一转换消息,支持工具调用的 assistant / tool 往返"""
+    from langchain_core.messages import (
+        AIMessage, HumanMessage, SystemMessage, ToolMessage,
+    )
+
+    lc_msgs = []
+    for m in messages:
+        role = m.get("role")
+        content = m.get("content") or ""
+        if role == "system":
+            lc_msgs.append(SystemMessage(content=content))
+        elif role == "assistant":
+            calls = m.get("tool_calls") or []
+            if calls:
+                lc_msgs.append(AIMessage(
+                    content=content,
+                    tool_calls=[
+                        {
+                            "name": call.get("name", ""),
+                            "args": call.get("arguments") or {},
+                            "id": call.get("id") or f"call_{i}",
+                        }
+                        for i, call in enumerate(calls)
+                    ],
+                ))
+            else:
+                lc_msgs.append(AIMessage(content=content))
+        elif role == "tool":
+            lc_msgs.append(ToolMessage(
+                content=content,
+                tool_call_id=m.get("tool_call_id") or "call_0",
+            ))
+        else:
+            lc_msgs.append(HumanMessage(content=content))
+    return lc_msgs
+
+
+def _to_openai_tools(tools: list[dict]) -> list[dict]:
+    """把裸 Schema 转成 OpenAI function calling 格式;已是完整格式的原样保留"""
+    converted = []
+    for tool in tools or []:
+        if tool.get("type") == "function":
+            converted.append(tool)
+            continue
+        converted.append({
+            "type": "function",
+            "function": {
+                "name": tool.get("name", ""),
+                "description": tool.get("description", ""),
+                "parameters": tool.get("parameters") or {
+                    "type": "object", "properties": {},
+                },
+            },
+        })
+    return converted
+
+
+def _extract_tool_calls(resp) -> list[dict]:
+    """从模型响应提取工具调用,统一成 {id, name, arguments}"""
+    calls = getattr(resp, "tool_calls", None) or []
+    extracted = []
+    for index, call in enumerate(calls):
+        if not isinstance(call, dict):
+            continue
+        name = call.get("name") or ""
+        if not name:
+            continue
+        extracted.append({
+            "id": call.get("id") or f"call_{index}",
+            "name": name,
+            "arguments": call.get("args") or call.get("arguments") or {},
+        })
+    return extracted
+
+
+def _content_text(resp) -> str:
+    content = getattr(resp, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            part.get("text", "") if isinstance(part, dict) else str(part)
+            for part in content
+        )
+    return str(content or "")
+
+
+async def _emit_chunks(sink, text: str) -> None:
+    """把完整文本分块推给流式通道,避免前端等到整段结束才看到内容"""
+    if not text:
+        return
+    for start in range(0, len(text), _STREAM_CHUNK_SIZE):
+        await sink.put(("token", text[start:start + _STREAM_CHUNK_SIZE]))
+
+
+async def llm_invoke(
+    messages: list[dict],
+    temperature: float | None = None,
+    sink=None,
+    tools: list[dict] | None = None,
+) -> str | ToolPlan:
     """调用 LLM,返回完整文本
 
     sink: 传入 asyncio.Queue 时改为流式生成,每产出一段就 put(("token", 文本)),
@@ -48,15 +166,18 @@ async def llm_invoke(messages: list[dict], temperature: float | None = None, sin
     而不是等整个节点跑完(首字延迟从"全流程耗时"降到"模型首个 token")。
     """
     llm = get_llm(temperature)
-    from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-    lc_msgs = []
-    for m in messages:
-        if m["role"] == "system":
-            lc_msgs.append(SystemMessage(content=m["content"]))
-        elif m["role"] == "assistant":
-            lc_msgs.append(AIMessage(content=m["content"]))
-        else:
-            lc_msgs.append(HumanMessage(content=m["content"]))
+    lc_msgs = _to_lc_messages(messages)
+
+    if tools:
+        # 工具决策阶段不做 token 流式:需要完整响应才能拿到 tool_calls
+        resp = await llm.bind_tools(_to_openai_tools(tools)).ainvoke(lc_msgs)
+        calls = _extract_tool_calls(resp)
+        content = _content_text(resp)
+        if calls:
+            return ToolPlan(content=content, tool_calls=calls)
+        if sink is not None:
+            await _emit_chunks(sink, content)
+        return content
 
     if sink is not None:
         parts = []
@@ -74,15 +195,7 @@ async def llm_invoke(messages: list[dict], temperature: float | None = None, sin
 async def llm_stream(messages: list[dict], temperature: float | None = None):
     """流式调用,逐 token 生成"""
     llm = get_llm(temperature)
-    from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-    lc_msgs = []
-    for m in messages:
-        if m["role"] == "system":
-            lc_msgs.append(SystemMessage(content=m["content"]))
-        elif m["role"] == "assistant":
-            lc_msgs.append(AIMessage(content=m["content"]))
-        else:
-            lc_msgs.append(HumanMessage(content=m["content"]))
+    lc_msgs = _to_lc_messages(messages)
     async for chunk in llm.astream(lc_msgs):
         if chunk.content:
             yield chunk.content

@@ -117,6 +117,78 @@
           </div>
         </div>
       </el-tab-pane>
+      <!-- 写操作审计 -->
+      <el-tab-pane label="写操作审计" name="audit">
+        <div class="tab-body">
+          <div class="filter-bar">
+            <el-select v-model="aAction" placeholder="全部写操作" clearable style="width: 260px">
+              <el-option
+                v-for="item in actionOptions"
+                :key="item.key"
+                :label="`${item.label}（${item.level_label}）`"
+                :value="item.key"
+              />
+            </el-select>
+            <el-button type="primary" @click="reloadAudit"><el-icon><Search /></el-icon> 查询</el-button>
+            <div class="filter-bar__spacer"></div>
+            <span class="filter-bar__count">共 {{ aTotal }} 条写操作</span>
+          </div>
+
+          <div class="panel">
+            <el-table :data="audits" v-loading="aLoading">
+              <el-table-column prop="id" label="ID" width="70" />
+              <el-table-column label="操作人" width="160">
+                <template #default="{ row }">
+                  {{ row.user_name || '未知' }}<span class="dim"> #{{ row.user_id }} · {{ row.user_role }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="动作" min-width="180">
+                <template #default="{ row }">
+                  {{ row.action_label }}<span class="dim"> {{ row.action }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="审批级别" width="110">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="levelType(row.approval_mode)" effect="light">
+                    {{ row.approval_label }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="状态" width="90">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="row.status === 'executed' ? 'success' : 'info'">
+                    {{ row.status === 'executed' ? '已执行' : '待确认' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="对象" width="150">
+                <template #default="{ row }">
+                  {{ row.target_type }}<span class="dim"> #{{ row.target_id ?? '—' }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="detail" label="详情" min-width="240" show-overflow-tooltip />
+              <el-table-column label="时间" width="180">
+                <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+              </el-table-column>
+              <template #empty>
+                <div class="empty-state">暂无写操作审计</div>
+              </template>
+            </el-table>
+
+            <div class="pager">
+              <el-pagination
+                v-model:current-page="aPage"
+                v-model:page-size="aSize"
+                :total="aTotal"
+                :page-sizes="[10, 20, 50]"
+                layout="total, sizes, prev, pager, next"
+                @current-change="loadAudit"
+                @size-change="reloadAudit"
+              />
+            </div>
+          </div>
+        </div>
+      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
@@ -124,6 +196,7 @@
 <script setup>
 import { ref, reactive, onMounted, watch } from 'vue'
 import { adminApi } from '../../api/admin'
+import { approvalsApi } from '../../api/approvals'
 
 const tab = ref('interaction')
 
@@ -142,6 +215,15 @@ const oTotal = ref(0)
 const oPage = ref(1)
 const oSize = ref(20)
 const oFilters = reactive({ admin_id: '', action: '', target_type: '' })
+
+// 写操作审计
+const aLoading = ref(false)
+const audits = ref([])
+const aTotal = ref(0)
+const aPage = ref(1)
+const aSize = ref(20)
+const aAction = ref('')
+const actionOptions = ref([])
 
 const actions = ['create', 'update', 'delete', 'enable', 'disable', 'approve', 'reject', 'config']
 const targetTypes = ['user', 'course', 'material', 'config']
@@ -192,8 +274,44 @@ function reloadOperation() {
   loadOperation()
 }
 
+async function loadAudit() {
+  aLoading.value = true
+  try {
+    const data = await approvalsApi.logs({
+      page: aPage.value,
+      size: aSize.value,
+      scope: 'all',
+      action: aAction.value || undefined,
+    })
+    audits.value = data.items || []
+    aTotal.value = data.total || 0
+  } catch { /* 拦截器已提示 */ } finally {
+    aLoading.value = false
+  }
+}
+
+async function loadActionCatalog() {
+  try {
+    const data = await approvalsApi.actions()
+    actionOptions.value = data.items || []
+  } catch { /* 拦截器已提示 */ }
+}
+
+function reloadAudit() {
+  aPage.value = 1
+  loadAudit()
+}
+
+function levelType(level) {
+  return { manual: 'danger', auto: 'warning', full: 'success' }[level] || 'info'
+}
+
 watch(tab, (v) => {
   if (v === 'operation' && !operations.value.length) loadOperation()
+  if (v === 'audit') {
+    if (!actionOptions.value.length) loadActionCatalog()
+    if (!audits.value.length) loadAudit()
+  }
 })
 
 function formatTime(t) {

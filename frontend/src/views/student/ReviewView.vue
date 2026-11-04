@@ -6,7 +6,7 @@
         <p class="page-sub">按遗忘曲线为每道错题安排 6 轮复习，完成后自动推下一轮</p>
       </div>
       <div class="page-head__actions">
-        <el-select v-model="courseId" placeholder="选择课程" style="width: 220px" @change="load">
+        <el-select v-model="courseId" placeholder="选择课程" filterable style="width: 220px" @change="load">
           <el-option v-for="c in courses" :key="c.id" :label="c.name" :value="c.id" />
         </el-select>
         <el-radio-group v-model="statusFilter" @change="load" :disabled="!courseId">

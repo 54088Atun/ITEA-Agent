@@ -16,6 +16,7 @@
         <div class="tab-body">
           <div class="filter-bar">
             <el-input v-model="filters.keyword" placeholder="课程名 / 课程代码" clearable style="width: 200px" @keyup.enter="reload" />
+            <el-input v-model="filters.semester" placeholder="学期" clearable style="width: 130px" @keyup.enter="reload" />
             <el-select v-model="filters.audit_status" placeholder="全部审核状态" clearable style="width: 160px">
               <el-option label="待审核" value="pending" />
               <el-option label="已通过" value="approved" />
@@ -97,7 +98,7 @@
       <el-tab-pane label="素材管理" name="materials">
         <div class="tab-body">
           <div class="filter-bar">
-            <el-select v-model="materialCourseId" placeholder="全部课程" clearable style="width: 240px">
+            <el-select v-model="materialCourseId" placeholder="全部课程" clearable filterable style="width: 240px">
               <el-option v-for="c in courseOptions" :key="c.id" :label="c.name" :value="c.id" />
             </el-select>
             <el-button type="primary" @click="reloadMaterials"><el-icon><Search /></el-icon> 查询</el-button>
@@ -163,7 +164,7 @@ const courses = ref([])
 const total = ref(0)
 const page = ref(1)
 const size = ref(20)
-const filters = reactive({ keyword: '', audit_status: '' })
+const filters = reactive({ keyword: '', semester: '', audit_status: '' })
 
 const tableRef = ref()
 const selectedIds = ref([])
@@ -189,6 +190,7 @@ async function load() {
       page: page.value,
       size: size.value,
       audit_status: filters.audit_status || undefined,
+      semester: filters.semester || undefined,
       keyword: filters.keyword || undefined,
     })
     courses.value = data.items || []

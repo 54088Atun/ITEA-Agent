@@ -10,6 +10,7 @@
           v-model="courseId"
           placeholder="选择课程（可选）"
           clearable
+          filterable
           style="width: 220px"
           @change="newSession"
         >
@@ -30,7 +31,7 @@
       type="info"
       :closable="false"
       show-icon
-      title="还没有课程：输入教师提供的班级邀请码加入后，就能看到该班级课程与资料。"
+      title="还没有课程：输入教师提供的课程码加入后，就能看到该班级课程与资料。"
     />
 
     <div class="chat-container">
@@ -44,9 +45,9 @@
       />
     </div>
 
-    <el-dialog v-model="joinVisible" title="加入班级" width="420px">
-      <el-input v-model="inviteCode" placeholder="输入教师提供的邀请码" @keyup.enter="join" />
-      <p class="join-hint">加入后会自动获得该班级课程的访问权限。</p>
+    <el-dialog v-model="joinVisible" title="使用课程码加入" width="420px">
+      <el-input v-model="inviteCode" placeholder="输入教师提供的课程码" @keyup.enter="join" />
+      <p class="join-hint">学生使用班级课程码加入班级；教师课程码仅教师可用。</p>
       <template #footer>
         <el-button @click="joinVisible = false">取消</el-button>
         <el-button type="primary" :loading="joining" @click="join">加入</el-button>
@@ -60,7 +61,7 @@ import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import ChatWindow from '../../components/ChatWindow.vue'
 import { courseApi } from '../../api/course'
-import { classroomApi } from '../../api/classroom'
+import { codeApi } from '../../api/codes'
 
 const courses = ref([])
 const courseId = ref(null)
@@ -92,10 +93,10 @@ function newSession() {
 
 async function join() {
   const code = inviteCode.value.trim()
-  if (!code) return ElMessage.warning('请输入邀请码')
+  if (!code) return ElMessage.warning('请输入课程码')
   joining.value = true
   try {
-    const data = await classroomApi.join(code)
+    const data = await codeApi.redeem(code)
     ElMessage.success(`已加入班级：${data.class_name}`)
     joinVisible.value = false
     inviteCode.value = ''

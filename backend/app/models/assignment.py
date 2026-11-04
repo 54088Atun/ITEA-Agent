@@ -9,7 +9,7 @@
 """
 from sqlalchemy import (
     Column, BigInteger, String, Text, Integer, DateTime, ForeignKey,
-    UniqueConstraint, func,
+    UniqueConstraint, Boolean, func,
 )
 from app.db.session import Base
 
@@ -32,6 +32,10 @@ class Assignment(Base):
     description = Column(Text, comment="作业要求")
     reference_answer = Column(Text, comment="参考答案,截止前不对学生下发")
     due_at = Column(DateTime, nullable=True, comment="截止时间")
+    allow_late = Column(
+        Boolean, nullable=False, default=False, server_default="0",
+        comment="截止后是否允许正式补交",
+    )
     status = Column(
         String(20), nullable=False, default="published", server_default="published",
         comment="draft/published/closed",
@@ -53,6 +57,11 @@ class Submission(Base):
     student_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
     content = Column(Text, nullable=False, comment="提交内容")
     attachment_url = Column(String(500), comment="附件地址(可选)")
+    status = Column(
+        String(20), nullable=False, default="submitted", server_default="submitted",
+        comment="draft/submitted",
+    )
+    submitted_at = Column(DateTime, nullable=True, comment="正式提交时间")
     ai_score = Column(Integer, comment="AI 建议分数,未确认前不生效")
     ai_feedback = Column(Text, comment="AI 建议评语")
     ai_graded_at = Column(DateTime, comment="AI 批改时间")

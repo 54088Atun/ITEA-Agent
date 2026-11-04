@@ -6,6 +6,7 @@
 - 截止前不下发参考答案;AI 建议不写正式成绩,必须教师确认
 """
 import logging
+import uuid
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,15 +16,21 @@ from sqlalchemy.orm import Session
 from app.core.deps import require_student, require_teacher
 from app.db.session import get_db
 from app.models.assignment import Assignment, Submission
-from app.models.classroom import ClassMember, Classroom, CourseEnrollment
+from app.models.classroom import (
+    ClassAnnouncement, ClassMember, Classroom, CourseEnrollment,
+)
 from app.models.course import Course
 from app.models.user import User
+from app.schemas.admin import BatchItemError, BatchResult
 from app.schemas.assignment import (
-    AssignmentCreate, GradeConfirmRequest, SubmissionCreate,
+    AssignmentBatchPublishRequest, AssignmentCreate, AssignmentRemindRequest,
+    CourseAnnouncementRequest, GradeConfirmRequest, StudentFeedbackRequest,
+    SubmissionCreate,
 )
 from app.services.feature_flags import is_enabled
 from app.services.grader import grade_submission
-from app.services.notifications import notify_task_students
+from app.services.notifications import create_notification, notify_task_students
+from app.services.write_approval import authorize_write, record_executed
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["作业"])
@@ -81,15 +88,18 @@ def _student_conditions(db: Session, student: User):
     return conditions
 
 
-def _visible_assignment(db: Session, assignment_id: int, student: User) -> Assignment:
+def _visible_assignment(
+    db: Session, assignment_id: int, student: User, include_closed: bool = False,
+) -> Assignment:
     row = db.query(Assignment).filter(Assignment.id == assignment_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="作业不存在")
     conditions = _student_conditions(db, student)
+    statuses = ("published", "closed") if include_closed else ("published",)
     if conditions:
         visible = db.query(Assignment).filter(
             Assignment.id == assignment_id,
-            Assignment.status == "published",
+            Assignment.status.in_(statuses),
             or_(*conditions),
         ).first()
     else:
@@ -112,6 +122,7 @@ def _teacher_summary(row: Assignment, total: int, pending: int) -> dict:
         "class_id": row.class_id,
         "description": row.description,
         "due_at": row.due_at,
+        "allow_late": row.allow_late,
         "status": row.status,
         "created_at": row.created_at,
         "submission_count": total,
@@ -127,19 +138,20 @@ def create_assignment(
     teacher: User = Depends(require_teacher),
     db: Session = Depends(get_db),
 ):
-    """发布作业:至少指定课程或班级之一"""
+    """发布作业:必须绑定课程,班级仅作为发放范围(决策 #8)"""
     if not is_enabled(db, "feature_assignments"):
         raise HTTPException(status_code=403, detail="作业与考试功能已关闭")
-    if not req.course_id and not req.class_id:
-        raise HTTPException(status_code=400, detail="请至少指定课程或班级")
-    if req.course_id:
-        _owned_course(db, req.course_id, teacher)
+    if not req.course_id:
+        raise HTTPException(status_code=400, detail="作业必须绑定课程")
+    _owned_course(db, req.course_id, teacher)
     if req.class_id:
         classroom = db.query(Classroom).filter(Classroom.id == req.class_id).first()
         if not classroom:
             raise HTTPException(status_code=404, detail="班级不存在")
         if teacher.role != "admin" and classroom.teacher_id != teacher.id:
             raise HTTPException(status_code=403, detail="只能向自己的班级发布作业")
+        if classroom.course_id and classroom.course_id != req.course_id:
+            raise HTTPException(status_code=400, detail="所选班级不属于该课程")
 
     due_at = req.due_at
     if due_at is None and req.due_days:
@@ -154,6 +166,7 @@ def create_assignment(
         description=req.description,
         reference_answer=req.reference_answer,
         due_at=due_at,
+        allow_late=req.allow_late,
         status="published" if req.publish else "draft",
     )
     db.add(row)
@@ -181,10 +194,12 @@ def list_assignments(
     result = []
     for row in rows:
         total = db.query(func.count(Submission.id)).filter(
-            Submission.assignment_id == row.id
+            Submission.assignment_id == row.id,
+            Submission.status == "submitted",
         ).scalar() or 0
         pending = db.query(func.count(Submission.id)).filter(
             Submission.assignment_id == row.id,
+            Submission.status == "submitted",
             Submission.confirmed_at.is_(None),
         ).scalar() or 0
         result.append(_teacher_summary(row, total, pending))
@@ -202,7 +217,10 @@ def get_assignment(
     subs = (
         db.query(Submission, User)
         .join(User, Submission.student_id == User.id)
-        .filter(Submission.assignment_id == row.id)
+        .filter(
+            Submission.assignment_id == row.id,
+            Submission.status == "submitted",
+        )
         .order_by(Submission.id.desc())
         .all()
     )
@@ -220,7 +238,7 @@ def get_assignment(
             "feedback": sub.feedback,
             "confirmed": sub.confirmed_at is not None,
             "confirmed_at": sub.confirmed_at,
-            "submitted_at": sub.created_at,
+            "submitted_at": sub.submitted_at or sub.created_at,
         }
         for sub, user in subs
     ]
@@ -237,12 +255,22 @@ def publish_assignment(
     assignment_id: int,
     teacher: User = Depends(require_teacher),
     db: Session = Depends(get_db),
+    confirm: bool = False,
 ):
     row = _owned_assignment(db, assignment_id, teacher)
+    action = authorize_write(
+        db, teacher, "assignment.publish", confirmed=confirm,
+        target_type="assignment", target_id=row.id,
+        detail={"title": row.title, "from": row.status},
+    )
     row.status = "published"
     notify_task_students(
         db, "assignment", row.id, row.title, row.course_id, row.class_id,
         f"/student/assignments?assignment_id={row.id}",
+    )
+    record_executed(
+        db, teacher, action, target_type="assignment", target_id=row.id,
+        detail={"title": row.title, "status": "published"},
     )
     db.commit()
     return {"id": row.id, "status": row.status}
@@ -253,11 +281,34 @@ def close_assignment(
     assignment_id: int,
     teacher: User = Depends(require_teacher),
     db: Session = Depends(get_db),
+    confirm: bool = False,
 ):
     row = _owned_assignment(db, assignment_id, teacher)
+    action = authorize_write(
+        db, teacher, "assignment.close", confirmed=confirm,
+        target_type="assignment", target_id=row.id,
+        detail={"title": row.title, "from": row.status},
+    )
     row.status = "closed"
+    record_executed(
+        db, teacher, action, target_type="assignment", target_id=row.id,
+        detail={"title": row.title, "status": "closed"},
+    )
     db.commit()
     return {"id": row.id, "status": row.status}
+
+
+@router.post("/teacher/assignments/{assignment_id}/allow-late")
+def set_allow_late(
+    assignment_id: int,
+    enabled: bool,
+    teacher: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    row = _owned_assignment(db, assignment_id, teacher)
+    row.allow_late = enabled
+    db.commit()
+    return {"id": row.id, "allow_late": row.allow_late}
 
 
 @router.post("/teacher/submissions/{submission_id}/ai-grade")
@@ -268,9 +319,16 @@ async def ai_grade_submission(
 ):
     """生成 AI 建议评分:只写 ai_* 字段,不改变正式成绩"""
     sub = _owned_submission(db, submission_id, teacher)
+    if sub.status != "submitted":
+        raise HTTPException(status_code=400, detail="草稿不参与教师批改")
     assignment = db.query(Assignment).filter(
         Assignment.id == sub.assignment_id
     ).first()
+    action = authorize_write(
+        db, teacher, "assignment.ai_grade", confirmed=True,
+        target_type="submission", target_id=sub.id,
+        detail={"assignment_id": sub.assignment_id},
+    )
     result = await grade_submission(
         assignment.title, assignment.description, sub.content,
         assignment.reference_answer,
@@ -278,6 +336,10 @@ async def ai_grade_submission(
     sub.ai_score = result["score"]
     sub.ai_feedback = result["feedback"]
     sub.ai_graded_at = datetime.utcnow()
+    record_executed(
+        db, teacher, action, target_type="submission", target_id=sub.id,
+        detail={"ai_score": sub.ai_score, "source": result["source"]},
+    )
     db.commit()
     return {
         "submission_id": sub.id,
@@ -297,10 +359,21 @@ def confirm_grade(
 ):
     """教师确认评分:写入正式 score/feedback 后学生才可见"""
     sub = _owned_submission(db, submission_id, teacher)
+    if sub.status != "submitted":
+        raise HTTPException(status_code=400, detail="草稿不参与教师批改")
+    action = authorize_write(
+        db, teacher, "assignment.grade_confirm", confirmed=True,
+        target_type="submission", target_id=sub.id,
+        detail={"assignment_id": sub.assignment_id, "score": req.score},
+    )
     sub.score = req.score
     sub.feedback = req.feedback if req.feedback is not None else sub.ai_feedback
     sub.confirmed_at = datetime.utcnow()
     sub.confirmed_by = teacher.id
+    record_executed(
+        db, teacher, action, target_type="submission", target_id=sub.id,
+        detail={"score": sub.score},
+    )
     db.commit()
     return {
         "submission_id": sub.id,
@@ -310,11 +383,202 @@ def confirm_grade(
     }
 
 
+@router.post("/teacher/assignments/batch-publish")
+def batch_publish_assignments(
+    req: AssignmentBatchPublishRequest,
+    teacher: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+    confirm: bool = False,
+):
+    """批量发布作业:默认只预演,确认后统一审批并一次性提交"""
+    result = BatchResult(dry_run=req.dry_run)
+    ids = list(dict.fromkeys(req.assignment_ids))
+    rows = db.query(Assignment).filter(Assignment.id.in_(ids)).all()
+    found = {row.id: row for row in rows}
+    changed = []
+    for assignment_id in ids:
+        row = found.get(assignment_id)
+        if row is None:
+            result.failed.append(BatchItemError(id=assignment_id, reason="作业不存在"))
+            continue
+        if teacher.role != "admin" and row.teacher_id != teacher.id:
+            result.skipped.append(
+                BatchItemError(id=assignment_id, reason="只能操作自己发布的作业")
+            )
+            continue
+        if row.status == "published":
+            result.skipped.append(BatchItemError(id=assignment_id, reason="作业已发布"))
+            continue
+        changed.append(row)
+
+    result.affected = [row.id for row in changed]
+    if req.dry_run or not changed:
+        return result
+
+    action = authorize_write(
+        db, teacher, "assignment.publish", confirmed=confirm,
+        target_type="assignment", target_id=changed[0].id,
+        detail={"assignment_ids": result.affected, "count": len(changed)},
+    )
+    for row in changed:
+        row.status = "published"
+        notify_task_students(
+            db, "assignment", row.id, row.title, row.course_id, row.class_id,
+            f"/student/assignments?assignment_id={row.id}",
+        )
+    record_executed(
+        db, teacher, action, target_type="assignment", target_id=None,
+        detail={"assignment_ids": result.affected, "count": len(changed)},
+    )
+    db.commit()
+    return result
+
+
+@router.post("/teacher/assignments/{assignment_id}/remind")
+def remind_assignment(
+    assignment_id: int,
+    req: AssignmentRemindRequest,
+    teacher: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """提醒未提交学生:默认只预演,按批次幂等写入站内通知"""
+    row = _owned_assignment(db, assignment_id, teacher)
+    if row.class_id is not None:
+        roster = [uid for (uid,) in db.query(ClassMember.student_id).filter(
+            ClassMember.class_id == row.class_id,
+            ClassMember.status == "active",
+        ).all()]
+    elif row.course_id is not None:
+        roster = [uid for (uid,) in db.query(CourseEnrollment.student_id).filter(
+            CourseEnrollment.course_id == row.course_id,
+        ).all()]
+    else:
+        roster = []
+    submitted = {
+        uid for (uid,) in db.query(Submission.student_id).filter(
+            Submission.assignment_id == row.id,
+            Submission.status == "submitted",
+        ).all()
+    }
+    targets = sorted(set(roster) - submitted)
+    result = BatchResult(dry_run=req.dry_run, affected=targets)
+    if req.dry_run or not targets:
+        return result
+
+    message = (req.message or "").strip() or f"作业“{row.title}”尚未提交，请尽快完成。"
+    batch = uuid.uuid4().hex[:8]
+    affected = []
+    for user_id in targets:
+        created = create_notification(
+            db=db,
+            user_id=user_id,
+            category="assignment",
+            title=f"作业提醒：{row.title}",
+            message=message,
+            link_url=f"/student/assignments?assignment_id={row.id}",
+            source_type="assignment",
+            source_id=f"{row.id}:remind:{batch}",
+        )
+        if created is None:
+            result.skipped.append(
+                BatchItemError(id=user_id, reason="学生已关闭作业通知")
+            )
+        else:
+            affected.append(user_id)
+    result.affected = affected
+    db.commit()
+    return result
+
+
+@router.post("/teacher/students/{student_id}/feedback")
+def give_student_feedback(
+    student_id: int,
+    req: StudentFeedbackRequest,
+    teacher: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+    confirm: bool = False,
+):
+    """教师对指定学生作业给出成绩与反馈,等价于确认该次提交"""
+    row = _owned_assignment(db, req.assignment_id, teacher)
+    sub = db.query(Submission).filter(
+        Submission.assignment_id == row.id,
+        Submission.student_id == student_id,
+    ).first()
+    if not sub:
+        raise HTTPException(status_code=404, detail="该学生尚未提交作业")
+    if sub.status != "submitted":
+        raise HTTPException(status_code=400, detail="该学生尚未正式提交")
+
+    action = authorize_write(
+        db, teacher, "assignment.grade_confirm", confirmed=confirm,
+        target_type="submission", target_id=sub.id,
+        detail={
+            "assignment_id": row.id,
+            "student_id": student_id,
+            "score": req.score,
+        },
+    )
+    sub.score = req.score
+    sub.feedback = req.feedback if req.feedback is not None else sub.ai_feedback
+    sub.confirmed_at = datetime.utcnow()
+    sub.confirmed_by = teacher.id
+    record_executed(
+        db, teacher, action, target_type="submission", target_id=sub.id,
+        detail={"assignment_id": row.id, "student_id": student_id, "score": sub.score},
+    )
+    db.commit()
+    return {
+        "submission_id": sub.id,
+        "assignment_id": row.id,
+        "student_id": student_id,
+        "score": sub.score,
+        "feedback": sub.feedback,
+        "confirmed_at": sub.confirmed_at,
+    }
+
+
+@router.post("/teacher/courses/{course_id}/announcement")
+def publish_course_announcement(
+    course_id: int,
+    req: CourseAnnouncementRequest,
+    teacher: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """按课程发布公告:落到该课程下的班级公告板,一个班级一条"""
+    course = _owned_course(db, course_id, teacher)
+    content = (req.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="公告内容不能为空")
+    query = db.query(Classroom).filter(Classroom.course_id == course.id)
+    if req.class_id is not None:
+        query = query.filter(Classroom.id == req.class_id)
+    classes = query.all()
+    if not classes:
+        raise HTTPException(status_code=404, detail="班级不存在或不属于该课程")
+
+    announcements = []
+    for classroom in classes:
+        row = ClassAnnouncement(
+            class_id=classroom.id, author_id=teacher.id, content=content,
+        )
+        db.add(row)
+        db.flush()
+        announcements.append({"id": row.id, "class_id": classroom.id})
+    db.commit()
+    return {
+        "course_id": course.id,
+        "announcements": announcements,
+        "count": len(announcements),
+    }
+
+
 # ---------- 学生端 ----------
 
 def _student_submission_state(sub: Submission | None, due_passed: bool) -> str:
     if sub is None:
         return "overdue" if due_passed else "not_submitted"
+    if sub.status == "draft":
+        return "draft"
     if sub.confirmed_at is not None:
         return "graded"
     return "pending_review"
@@ -364,6 +628,7 @@ def list_my_assignments(
             "course_name": courses.get(row.course_id),
             "teacher_name": teachers.get(row.teacher_id, ""),
             "due_at": row.due_at,
+            "allow_late": row.allow_late,
             "created_at": row.created_at,
             "state": _student_submission_state(sub, _due_passed(row)),
             "score": sub.score if sub and sub.confirmed_at else None,
@@ -390,7 +655,8 @@ def get_my_assignment(
             "id": sub.id,
             "content": sub.content,
             "attachment_url": sub.attachment_url,
-            "submitted_at": sub.created_at,
+            "status": sub.status,
+            "submitted_at": sub.submitted_at or sub.created_at if sub.status == "submitted" else None,
             "confirmed": sub.confirmed_at is not None,
             "score": sub.score if sub.confirmed_at else None,
             "feedback": sub.feedback if sub.confirmed_at else None,
@@ -402,6 +668,7 @@ def get_my_assignment(
         "description": row.description,
         "course_id": row.course_id,
         "due_at": row.due_at,
+        "allow_late": row.allow_late,
         "status": row.status,
         "due_passed": due_passed,
         "reference_answer": row.reference_answer if due_passed else None,
@@ -417,12 +684,13 @@ def submit_assignment(
     student: User = Depends(require_student),
     db: Session = Depends(get_db),
 ):
-    """提交作业:截止后拒绝;已确认评分的提交不可修改"""
-    row = _visible_assignment(db, assignment_id, student)
+    """保存私有草稿或正式提交;已确认评分的提交不可修改"""
+    row = _visible_assignment(db, assignment_id, student, include_closed=True)
     if row.status != "published":
         raise HTTPException(status_code=400, detail="作业已关闭，无法提交")
-    if _due_passed(row):
-        raise HTTPException(status_code=400, detail="已过截止时间，无法提交")
+    if _due_passed(row) and (req.draft or not row.allow_late):
+        detail = "已过截止时间，无法保存草稿" if req.draft else "已过截止时间，无法提交"
+        raise HTTPException(status_code=400, detail=detail)
 
     sub = db.query(Submission).filter(
         Submission.assignment_id == row.id,
@@ -430,6 +698,8 @@ def submit_assignment(
     ).first()
     if sub and sub.confirmed_at is not None:
         raise HTTPException(status_code=400, detail="作业已批改，不能再次提交")
+    if sub and sub.status == "submitted" and req.draft:
+        raise HTTPException(status_code=400, detail="正式提交后不能回退为草稿")
 
     if sub is None:
         sub = Submission(
@@ -446,11 +716,14 @@ def submit_assignment(
         sub.ai_score = None
         sub.ai_feedback = None
         sub.ai_graded_at = None
+    sub.status = "draft" if req.draft else "submitted"
+    sub.submitted_at = None if req.draft else datetime.utcnow()
     db.commit()
     db.refresh(sub)
     return {
         "id": sub.id,
         "assignment_id": row.id,
-        "state": "pending_review",
-        "submitted_at": sub.created_at,
+        "state": "draft" if req.draft else "pending_review",
+        "status": sub.status,
+        "submitted_at": sub.submitted_at,
     }

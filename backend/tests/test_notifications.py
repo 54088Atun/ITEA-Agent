@@ -118,9 +118,9 @@ def test_publish_notifies_only_targets_and_list_is_persistent(db):
 
     # 草稿发布才触达;重复发布按来源去重
     assert all(n["source_id"] != str(draft["id"]) for n in first["notifications"])
-    publish_assignment(draft["id"], teacher, db)
-    publish_assignment(assignment["id"], teacher, db)
-    publish_assignment(draft["id"], teacher, db)
+    publish_assignment(draft["id"], teacher, db, confirm=True)
+    publish_assignment(assignment["id"], teacher, db, confirm=True)
+    publish_assignment(draft["id"], teacher, db, confirm=True)
     notes = student_api.get_notifications(student, db)["notifications"]
     assert len(notes) == 4
     assert len([n for n in notes if n["source_type"] == "assignment"

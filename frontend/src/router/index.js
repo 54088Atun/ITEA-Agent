@@ -3,10 +3,22 @@ import { useUserStore } from '../stores/user'
 
 const routes = [
   {
+    path: '/',
+    name: 'home',
+    component: () => import('../views/home/HomeView.vue'),
+    meta: { public: true, redirectIfLoggedIn: true },
+  },
+  {
+    path: '/contact',
+    name: 'contact',
+    component: () => import('../views/contact/ContactView.vue'),
+    meta: { public: true },
+  },
+  {
     path: '/login',
     name: 'login',
     component: () => import('../views/auth/LoginView.vue'),
-    meta: { public: true },
+    meta: { public: true, guestOnly: true },
   },
   // ===== 教师端 =====
   {
@@ -53,17 +65,18 @@ const routes = [
       { path: 'courses', name: 'admin-courses', component: () => import('../views/admin/CourseAudit.vue') },
       { path: 'risk', name: 'admin-risk', component: () => import('../views/admin/RiskAudit.vue') },
       { path: 'logs', name: 'admin-logs', component: () => import('../views/admin/LogAudit.vue') },
+      { path: 'agent-runs', name: 'admin-agent-runs', component: () => import('../views/admin/AgentRunsView.vue') },
       { path: 'config', name: 'admin-config', component: () => import('../views/admin/SystemConfig.vue') },
+      { path: 'site-content', name: 'admin-site-content', component: () => import('../views/admin/SiteContent.vue') },
     ],
   },
-  { path: '/', redirect: '/login' },
   // 个人中心:所有已登录角色共用
   {
     path: '/profile',
     name: 'profile',
     component: () => import('../views/common/ProfileView.vue'),
   },
-  { path: '/:pathMatch(.*)*', redirect: '/login' },
+  { path: '/:pathMatch(.*)*', redirect: '/' },
 ]
 
 const router = createRouter({
@@ -76,8 +89,10 @@ router.beforeEach((to) => {
   const store = useUserStore()
 
   if (to.meta.public) {
-    // 已登录访问登录页 → 跳转对应首页
-    if (store.isLoggedIn) return store.homePath
+    // 已登录访问登录页 → 跳转对应首页；公开内容页（如联系我们）仍可浏览
+    if ((to.meta.guestOnly || to.meta.redirectIfLoggedIn) && store.isLoggedIn) {
+      return store.homePath
+    }
     return true
   }
 

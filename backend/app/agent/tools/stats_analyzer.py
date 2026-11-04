@@ -12,14 +12,30 @@ from datetime import datetime, timedelta
 from sqlalchemy import select, func
 
 from app.db.session import SessionLocal
+from app.models.classroom import ClassMember
 from app.models.profile import MasteryRecord, WrongQuestion, ReviewPlan, StudentProfile
 from app.models.course import KnowledgePoint
 from app.models.practice import PracticeRecord
+from app.services.course_access import agent_course_scope_error
 
 logger = logging.getLogger(__name__)
 
 
-def _analyze_weakness(course_id: int, top_n: int = 10) -> dict:
+def _profile_conditions(course_id: int, class_id: int | None):
+    """课程档案过滤条件;指定班级时只统计该班在册成员(决策 #7 分班独立)"""
+    conditions = [StudentProfile.course_id == course_id]
+    if class_id:
+        members = select(ClassMember.student_id).where(
+            ClassMember.class_id == class_id,
+            ClassMember.status == "active",
+        )
+        conditions.append(StudentProfile.user_id.in_(members))
+    return conditions
+
+
+def _analyze_weakness(
+    course_id: int, top_n: int = 10, class_id: int | None = None,
+) -> dict:
     """班级薄弱知识点 TOP-N"""
     db = SessionLocal()
     try:
@@ -32,7 +48,7 @@ def _analyze_weakness(course_id: int, top_n: int = 10) -> dict:
             )
             .join(StudentProfile, MasteryRecord.profile_id == StudentProfile.id)
             .join(KnowledgePoint, MasteryRecord.kp_id == KnowledgePoint.id)
-            .where(StudentProfile.course_id == course_id)
+            .where(*_profile_conditions(course_id, class_id))
             .group_by(KnowledgePoint.name)
             .order_by(func.avg(MasteryRecord.mastery_level).asc())
             .limit(top_n)
@@ -54,7 +70,7 @@ def _analyze_weakness(course_id: int, top_n: int = 10) -> dict:
                 func.count(WrongQuestion.id).label("cnt"),
             )
             .join(StudentProfile, WrongQuestion.profile_id == StudentProfile.id)
-            .where(StudentProfile.course_id == course_id)
+            .where(*_profile_conditions(course_id, class_id))
             .group_by(WrongQuestion.error_type)
         ).all()
         error_distribution = {r.error_type: r.cnt for r in error_rows}
@@ -67,7 +83,9 @@ def _analyze_weakness(course_id: int, top_n: int = 10) -> dict:
         db.close()
 
 
-def _analyze_progress(course_id: int, days: int = 30) -> dict:
+def _analyze_progress(
+    course_id: int, days: int = 30, class_id: int | None = None,
+) -> dict:
     """学习进度趋势(近 N 天练习量与掌握度变化)"""
     db = SessionLocal()
     try:
@@ -81,7 +99,7 @@ def _analyze_progress(course_id: int, days: int = 30) -> dict:
             )
             .join(StudentProfile, PracticeRecord.profile_id == StudentProfile.id)
             .where(
-                StudentProfile.course_id == course_id,
+                *_profile_conditions(course_id, class_id),
                 PracticeRecord.created_at >= since,
             )
             .group_by(func.date(PracticeRecord.created_at))
@@ -95,7 +113,7 @@ def _analyze_progress(course_id: int, days: int = 30) -> dict:
         avg_row = db.execute(
             select(func.avg(MasteryRecord.mastery_level))
             .join(StudentProfile, MasteryRecord.profile_id == StudentProfile.id)
-            .where(StudentProfile.course_id == course_id)
+            .where(*_profile_conditions(course_id, class_id))
         ).scalar()
         avg_mastery = round(float(avg_row), 2) if avg_row else 0
 
@@ -106,7 +124,7 @@ def _analyze_progress(course_id: int, days: int = 30) -> dict:
             .join(WrongQuestion, ReviewPlan.wrong_question_id == WrongQuestion.id)
             .join(StudentProfile, WrongQuestion.profile_id == StudentProfile.id)
             .where(
-                StudentProfile.course_id == course_id,
+                *_profile_conditions(course_id, class_id),
                 ReviewPlan.status == "pending",
             )
         ).scalar() or 0
@@ -120,7 +138,7 @@ def _analyze_progress(course_id: int, days: int = 30) -> dict:
         db.close()
 
 
-def _analyze_distribution(course_id: int) -> dict:
+def _analyze_distribution(course_id: int, class_id: int | None = None) -> dict:
     """学生掌握度分布(优秀/良好/及格/薄弱)"""
     db = SessionLocal()
     try:
@@ -130,7 +148,7 @@ def _analyze_distribution(course_id: int) -> dict:
                 func.avg(MasteryRecord.mastery_level).label("avg"),
             )
             .join(StudentProfile, MasteryRecord.profile_id == StudentProfile.id)
-            .where(StudentProfile.course_id == course_id)
+            .where(*_profile_conditions(course_id, class_id))
             .group_by(StudentProfile.user_id)
         ).all()
 
@@ -155,6 +173,8 @@ def stats_analyzer(
     course_id: int,
     metric: str = "weakness",
     top_n: int = 10,
+    user_id: int | None = None,
+    class_id: int | None = None,
 ) -> dict:
     """学情统计工具
 
@@ -162,14 +182,20 @@ def stats_analyzer(
         course_id: 课程 ID
         metric: 统计维度(weakness/progress/distribution)
         top_n: TOP-N 条数
+        user_id: 调用者 ID,用于课程范围强校验(缺失即拒绝)
+        class_id: 班级 ID,指定时只统计该班在册成员
 
     Returns:
         统计结果 JSON
     """
+    scope_error = agent_course_scope_error(user_id, course_id)
+    if scope_error:
+        return {"error": scope_error}
+
     analyzers = {
-        "weakness": lambda: _analyze_weakness(course_id, top_n),
-        "progress": lambda: _analyze_progress(course_id),
-        "distribution": lambda: _analyze_distribution(course_id),
+        "weakness": lambda: _analyze_weakness(course_id, top_n, class_id),
+        "progress": lambda: _analyze_progress(course_id, class_id=class_id),
+        "distribution": lambda: _analyze_distribution(course_id, class_id),
     }
     analyzer = analyzers.get(metric)
     if not analyzer:

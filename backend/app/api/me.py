@@ -10,9 +10,11 @@ import json
 import logging
 import secrets
 import shutil
+import uuid
 from datetime import datetime
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
@@ -32,6 +34,8 @@ from app.models.profile import MasteryRecord, ReviewPlan, StudentProfile, WrongQ
 from app.models.upload_event import UploadEvent
 from app.models.user import User
 from app.schemas.auth import UserOut
+from app.schemas.privacy import PrivacyOut, PrivacyUpdate
+from app.services import privacy as privacy_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/me", tags=["个人中心"])
@@ -80,6 +84,91 @@ def update_profile(
     return user
 
 
+AVATAR_MIME = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/webp": ".webp",
+}
+AVATAR_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+AVATAR_MAX_BYTES = 2 * 1024 * 1024
+
+
+@router.post("/avatar")
+async def upload_avatar(
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """上传头像:仅允许图片、≤2MB,旧头像文件同步删除"""
+    ext = AVATAR_MIME.get((file.content_type or "").lower())
+    if not ext:
+        ext = Path(file.filename or "").suffix.lower()
+    if ext not in AVATAR_EXTS:
+        raise HTTPException(status_code=400, detail="仅支持 PNG / JPG / WEBP 图片")
+    if ext == ".jpeg":
+        ext = ".jpg"
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="图片为空")
+    if len(data) > AVATAR_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="头像不能超过 2MB")
+
+    save_dir = settings.upload_path / "avatar"
+    save_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{user.id}_{uuid.uuid4().hex[:12]}{ext}"
+    (save_dir / filename).write_bytes(data)
+
+    old_url = user.avatar_url
+    user.avatar_url = f"/uploads/avatar/{filename}"
+    db.commit()
+    db.refresh(user)
+
+    if old_url and old_url.startswith("/uploads/avatar/"):
+        old_name = Path(old_url).name
+        old_path = save_dir / old_name
+        if old_path.exists():
+            old_path.unlink(missing_ok=True)
+
+    logger.info("头像更新: user=%s", user.id)
+    return {"avatar_url": user.avatar_url}
+
+
+@router.get("/privacy", response_model=PrivacyOut)
+def get_privacy(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = privacy_service.get_or_create(db, user.id)
+    db.commit()
+    return PrivacyOut(
+        name_visibility=row.name_visibility,
+        email_visibility=row.email_visibility,
+        learning_visibility=row.learning_visibility,
+    )
+
+
+@router.put("/privacy", response_model=PrivacyOut)
+def update_privacy(
+    req: PrivacyUpdate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = privacy_service.get_or_create(db, user.id)
+    row.name_visibility = req.name_visibility
+    row.email_visibility = req.email_visibility
+    row.learning_visibility = req.learning_visibility
+    db.commit()
+    db.refresh(row)
+    logger.info("隐私设置更新: user=%s", user.id)
+    return PrivacyOut(
+        name_visibility=row.name_visibility,
+        email_visibility=row.email_visibility,
+        learning_visibility=row.learning_visibility,
+    )
+
+
 @router.patch("/password")
 def change_password(
     req: PasswordChange,
@@ -91,8 +180,22 @@ def change_password(
     if req.old_password == req.new_password:
         raise HTTPException(status_code=400, detail="新密码不能与原密码相同")
     user.password_hash = hash_password(req.new_password)
+    # 改密后旧 token 全部失效,需重新登录
+    user.token_version = int(user.token_version or 0) + 1
     db.commit()
-    return {"updated": True}
+    return {"updated": True, "relogin_required": True}
+
+
+@router.post("/logout-all")
+def logout_all_devices(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """退出全部设备:递增令牌版本,使已签发的 JWT 立即失效"""
+    user.token_version = int(user.token_version or 0) + 1
+    db.commit()
+    logger.info("退出全部设备: user=%s", user.id)
+    return {"logout_all": True}
 
 
 # ---------- 数据导出 ----------

@@ -52,7 +52,7 @@ def get_features(
     db: Session = Depends(get_db),
 ):
     """读取灰度开关与配额(登录用户可见)"""
-    return public_features(db)
+    return public_features(db, user.role)
 
 
 # ---------- 学生学习记录 ----------
@@ -79,6 +79,7 @@ def student_records(
     for enr, course in enroll_rows:
         events.append({
             "type": "enrollment",
+            "record_id": enr.id,
             "title": f"加入课程《{course.name}》" if course else "加入课程",
             "detail": f"来源：{enr.source}",
             "course_id": enr.course_id,
@@ -100,6 +101,7 @@ def student_records(
         for rec, kp in practice_rows:
             events.append({
                 "type": "practice",
+                "record_id": rec.id,
                 "title": "完成练习" + (f"（{kp.name}）" if kp else ""),
                 "detail": (rec.content or "")[:120],
                 "course_id": plan_course.get(rec.profile_id),
@@ -118,6 +120,7 @@ def student_records(
         for wq in wrong_rows:
             events.append({
                 "type": "wrong",
+                "record_id": wq.id,
                 "title": f"新增错题（{wq.error_type or '未分类'}）",
                 "detail": (wq.question_content or "")[:120],
                 "course_id": plan_course.get(wq.profile_id),
@@ -137,6 +140,7 @@ def student_records(
         for plan, wq in review_rows:
             events.append({
                 "type": "review",
+                "record_id": plan.id,
                 "title": f"复习计划（已复习 {plan.review_count} 次）",
                 "detail": (wq.question_content or "")[:120],
                 "course_id": plan_course.get(wq.profile_id),
@@ -155,6 +159,7 @@ def student_records(
         for rec in interview_rows:
             events.append({
                 "type": "interview",
+                "record_id": rec.id,
                 "title": f"模拟面试 · 第 {rec.round} 轮",
                 "detail": f"得分 {rec.score}" if rec.score is not None else "已完成一轮问答",
                 "course_id": plan_course.get(rec.profile_id),
@@ -166,7 +171,10 @@ def student_records(
     sub_rows = (
         db.query(Submission, Assignment)
         .join(Assignment, Submission.assignment_id == Assignment.id)
-        .filter(Submission.student_id == student.id)
+        .filter(
+            Submission.student_id == student.id,
+            Submission.status == "submitted",
+        )
         .order_by(Submission.id.desc())
         .limit(limit)
         .all()
@@ -178,11 +186,12 @@ def student_records(
             detail = "已提交，待教师确认评分"
         events.append({
             "type": "assignment",
+            "record_id": sub.id,
             "title": f"提交{'考试' if asg.kind == 'exam' else '作业'}《{asg.title}》",
             "detail": detail,
             "course_id": asg.course_id,
-            "created_at": _iso(sub.created_at),
-            "_ts": _sort_key(sub.created_at),
+            "created_at": _iso(sub.submitted_at or sub.created_at),
+            "_ts": _sort_key(sub.submitted_at or sub.created_at),
         })
 
     events.sort(key=lambda e: e["_ts"], reverse=True)
@@ -222,7 +231,10 @@ def teacher_publish_records(
                 func.count(Submission.id),
                 func.sum(case((Submission.confirmed_at.isnot(None), 1), else_=0)),
             )
-            .filter(Submission.assignment_id.in_([a.id for a in assignments]))
+            .filter(
+                Submission.assignment_id.in_([a.id for a in assignments]),
+                Submission.status == "submitted",
+            )
             .group_by(Submission.assignment_id)
             .all()
         )

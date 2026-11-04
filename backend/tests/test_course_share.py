@@ -69,7 +69,7 @@ def test_only_owner_can_create_share(db):
         create_share(10, CourseShareCreate(), db.get(User, 4), db)
     assert exc.value.status_code == 403
 
-    share = create_share(10, CourseShareCreate(expires_days=3, max_uses=2), db.get(User, 1), db)
+    share = create_share(10, CourseShareCreate(expires_days=3, max_uses=2), db.get(User, 1), db, confirm=True)
     assert share["status"] == "active"
     assert share["max_uses"] == 2
     assert len(list_shares(10, db.get(User, 1), db)) == 1
@@ -77,7 +77,7 @@ def test_only_owner_can_create_share(db):
 
 
 def test_import_copies_snapshot_without_student_data(db):
-    share = create_share(10, CourseShareCreate(), db.get(User, 1), db)
+    share = create_share(10, CourseShareCreate(), db.get(User, 1), db, confirm=True)
     result = import_course(
         CourseImportRequest(code=share["code"].lower()), db.get(User, 2), db,
     )
@@ -107,7 +107,7 @@ def test_import_copies_snapshot_without_student_data(db):
 
 
 def test_expired_revoked_and_exhausted_codes(db):
-    share = create_share(10, CourseShareCreate(max_uses=1), db.get(User, 1), db)
+    share = create_share(10, CourseShareCreate(max_uses=1), db.get(User, 1), db, confirm=True)
     import_course(CourseImportRequest(code=share["code"]), db.get(User, 2), db)
 
     # 超次
@@ -116,15 +116,15 @@ def test_expired_revoked_and_exhausted_codes(db):
     assert exc.value.status_code == 400
 
     # 撤销
-    share2 = create_share(10, CourseShareCreate(), db.get(User, 1), db)
-    revoke_share(share2["id"], db.get(User, 1), db)
+    share2 = create_share(10, CourseShareCreate(), db.get(User, 1), db, confirm=True)
+    revoke_share(share2["id"], db.get(User, 1), db, confirm=True)
     with pytest.raises(HTTPException) as exc:
         import_course(CourseImportRequest(code=share2["code"]), db.get(User, 3), db)
     assert exc.value.status_code == 400
     assert "撤销" in exc.value.detail
 
     # 过期
-    share3 = create_share(10, CourseShareCreate(), db.get(User, 1), db)
+    share3 = create_share(10, CourseShareCreate(), db.get(User, 1), db, confirm=True)
     record = db.get(CourseShare, share3["id"])
     record.expires_at = datetime.utcnow() - timedelta(minutes=1)
     db.commit()
@@ -140,7 +140,7 @@ def test_expired_revoked_and_exhausted_codes(db):
 
 
 def test_cannot_import_own_course_and_only_owner_can_revoke(db):
-    share = create_share(10, CourseShareCreate(), db.get(User, 1), db)
+    share = create_share(10, CourseShareCreate(), db.get(User, 1), db, confirm=True)
     with pytest.raises(HTTPException) as exc:
         import_course(CourseImportRequest(code=share["code"]), db.get(User, 1), db)
     assert exc.value.status_code == 400

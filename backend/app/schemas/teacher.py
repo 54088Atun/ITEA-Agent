@@ -1,5 +1,5 @@
 """教师端相关请求/响应模型"""
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 
@@ -41,6 +41,38 @@ class ClassReportOut(BaseModel):
     students: List[StudentBrief] = []
 
 
+class ClassAssignmentStat(BaseModel):
+    assignment_id: int
+    title: str
+    due_at: Optional[datetime] = None
+    submitted: int
+    confirmed: int
+    pending: int
+    avg_score: Optional[float] = None
+
+
+class ClassExamStat(BaseModel):
+    exam_id: int
+    title: str
+    submitted: int
+    pending_manual: int
+    avg_score: Optional[float] = None
+
+
+class ClassStatsOut(BaseModel):
+    """班级维度学情与作业/考试统计(CL-05)"""
+    class_id: int
+    class_name: str
+    course_id: Optional[int] = None
+    course_name: Optional[str] = None
+    student_count: int
+    avg_progress: float
+    weak_points: List[WeakPointItem] = []
+    students: List[StudentBrief] = []
+    assignments: List[ClassAssignmentStat] = []
+    exams: List[ClassExamStat] = []
+
+
 class ExportRequest(BaseModel):
     type: str  # lesson_plan / preview_sheet / report
     course_id: int
@@ -51,3 +83,4 @@ class InterviewAssignmentCreate(BaseModel):
     course_id: Optional[int] = None
     description: Optional[str] = None
     due_days: Optional[int] = None
+    duration_minutes: int = Field(30, ge=1, le=120)

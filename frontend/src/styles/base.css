@@ -335,6 +335,158 @@ html.dark .md-body pre {
   border-radius: var(--r-sm);
 }
 
+/* ============ 富媒体渲染（AG-04） ============ */
+.md-body .math-slot {
+  display: inline-block;
+  max-width: 100%;
+}
+.md-body .math-slot--block {
+  display: block;
+  margin: var(--sp-3) 0;
+  overflow-x: auto;
+  text-align: center;
+}
+.md-body .math-slot--block .katex-display {
+  margin: 0;
+}
+
+.md-body .mermaid-slot {
+  margin: var(--sp-3) 0;
+  overflow-x: auto;
+}
+.md-body .mermaid-slot svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+/* 语法不完整/出错时保留源码，并给出可见提示 */
+.md-body .mermaid-slot[data-error] .rich-fallback {
+  border-left: 3px solid var(--warning-600);
+}
+.md-body .mermaid-slot[data-painted]:not([data-error]) .rich-fallback {
+  display: none;
+}
+
+.md-body .rich-data {
+  margin: var(--sp-2) 0 var(--sp-3);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+.md-body .rich-data summary {
+  cursor: pointer;
+  color: var(--color-primary);
+}
+.md-body .rich-data table {
+  margin-top: var(--sp-2);
+}
+
+.md-body .timeline {
+  list-style: none;
+  margin: var(--sp-3) 0;
+  padding: 0 0 0 var(--sp-4);
+  border-left: 2px solid var(--border);
+}
+.md-body .timeline__item {
+  position: relative;
+  margin: 0;
+  padding: 0 0 var(--sp-4) var(--sp-3);
+}
+.md-body .timeline__item:last-child {
+  padding-bottom: 0;
+}
+.md-body .timeline__dot {
+  position: absolute;
+  left: -21px;
+  top: 7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-primary);
+}
+.md-body .timeline__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+.md-body .timeline__time {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-accent);
+}
+.md-body .timeline__title {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.md-body .timeline__desc {
+  margin: var(--sp-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+/* 代码 diff：深色底逐行着色，增删靠色相区分（AG-15） */
+.md-body .code-diff {
+  margin: var(--sp-3) 0;
+  padding: var(--sp-3) 0;
+  background: #0f172a;
+  border-radius: var(--r-md);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: #cbd5e1;
+}
+.md-body .code-diff code {
+  display: block;
+  background: none;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+}
+.diff-line {
+  display: block;
+  padding: 0 var(--sp-3);
+  white-space: pre;
+  border-left: 2px solid transparent;
+}
+.diff-line.is-add {
+  background: rgba(34, 197, 94, 0.16);
+  color: #bbf7d0;
+  border-left-color: #22c55e;
+}
+.diff-line.is-del {
+  background: rgba(239, 68, 68, 0.16);
+  color: #fecaca;
+  border-left-color: #ef4444;
+}
+.diff-line.is-hunk {
+  color: #93c5fd;
+}
+.diff-line.is-file {
+  color: #f8fafc;
+  font-weight: 600;
+}
+.diff-line.is-meta {
+  color: #94a3b8;
+  font-style: italic;
+}
+.diff-line.is-ctx {
+  color: #cbd5e1;
+}
+
+/* 图表/流程图/时间线块自带 AI 标注（AG-08） */
+.md-body .chart-slot::after,
+.md-body .mermaid-slot::after,
+.md-body .timeline::after {
+  content: "[AI 辅助参考]";
+  display: block;
+  margin-top: var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--text-placeholder);
+  text-align: right;
+}
+
 /* AI 生成内容标注：铜金细边，提示"仅供参考" */
 .ai-tag {
   display: inline-flex;

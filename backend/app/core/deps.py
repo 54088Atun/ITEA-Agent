@@ -25,6 +25,9 @@ def get_current_user(
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:
         raise credentials_exc
+    # 令牌版本不一致表示已改密或已退出全部设备,旧 JWT 立即失效
+    if int(payload.get("ver", 0)) != int(getattr(user, "token_version", 0) or 0):
+        raise HTTPException(status_code=401, detail="登录状态已失效，请重新登录")
     if getattr(user, "status", "active") == "disabled":
         raise HTTPException(status_code=403, detail="账号已被禁用")
     return user

@@ -6,7 +6,8 @@
         <p class="page-sub">AI 面试官连续追问，结束后给出结构化评价与得分</p>
       </div>
       <div class="page-head__actions">
-        <el-select v-model="courseId" placeholder="选择课程" style="width: 220px" @change="onCourseChange">
+        <span v-if="active" class="interview-time">剩余时间 {{ formattedRemaining }}</span>
+        <el-select v-model="courseId" placeholder="选择课程" filterable style="width: 220px" @change="onCourseChange">
           <el-option v-for="c in courses" :key="c.id" :label="c.name" :value="c.id" />
         </el-select>
         <el-button @click="showRecords = true" :disabled="!courseId">
@@ -26,7 +27,7 @@
         <div class="assignment__main">
           <span class="assignment__title">{{ a.title }}</span>
           <span class="assignment__meta">
-            {{ a.teacher_name }} · {{ a.due_at ? `截止 ${formatTime(a.due_at)}` : '不限截止' }}
+            {{ a.teacher_name }} · {{ a.duration_minutes || 30 }} 分钟 · {{ a.due_at ? `截止 ${formatTime(a.due_at)}` : '不限截止' }}
           </span>
         </div>
         <el-button size="small" type="primary" plain @click="startFromAssignment(a)">去完成</el-button>
@@ -43,6 +44,9 @@
         branch="interview"
         :start-endpoint="INTERVIEW_START_URL"
         :start-body="startBody"
+        :duration-minutes="durationMinutes"
+        :interview-assignment-id="currentAssignment?.id || null"
+        @time-update="remainingSeconds = $event"
       />
       <div v-else class="panel empty-panel">
         <div class="empty-state">
@@ -59,9 +63,27 @@
             <div class="record">
               <div class="record-round">
                 <el-tag size="small" effect="light">第 {{ r.round }} 轮</el-tag>
-                <el-tag v-if="r.score != null" :type="r.score >= 80 ? 'success' : r.score >= 60 ? 'warning' : 'danger'" size="small" effect="light" style="margin-left: 8px">
-                  得分:{{ r.score }}
+                <el-tag
+                  :type="r.score == null ? 'info' : r.score >= 80 ? 'success' : r.score >= 60 ? 'warning' : 'danger'"
+                  size="small" effect="light" style="margin-left: 8px"
+                >
+                  综合评分：{{ r.score ?? '未评分' }}
                 </el-tag>
+              </div>
+              <div class="record-scores">
+                <span v-for="label in SCORE_LABELS" :key="label">
+                  {{ label }}：{{ dimensionScore(r, label) }}
+                </span>
+              </div>
+              <div class="record-visibility">
+                <el-switch
+                  :model-value="r.visibility === 'teacher'"
+                  :loading="visibilitySavingId === r.id"
+                  active-text="教师可见"
+                  inactive-text="仅自己"
+                  @change="changeVisibility(r, $event)"
+                />
+                <span>{{ r.visibility === 'teacher' ? '已授权课程/作业教师查看' : '私有记录，仅自己可见' }}</span>
               </div>
               <div class="record-section">
                 <span class="record-label">面试官提问</span>
@@ -86,10 +108,14 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useRoute } from 'vue-router'
 import ChatWindow from '../../components/ChatWindow.vue'
 import { studentApi, INTERVIEW_START_URL } from '../../api/student'
 import { courseApi } from '../../api/course'
 import { renderMarkdown } from '../../utils/markdown'
+
+const route = useRoute()
+const SCORE_LABELS = ['专业知识', '逻辑表达', '岗位匹配', '沟通应答']
 
 const courses = ref([])
 const courseId = ref(null)
@@ -99,11 +125,18 @@ const showRecords = ref(false)
 const records = ref([])
 const assignments = ref([])
 const loadingRecords = ref(false)
+const currentAssignment = ref(null)
+const remainingSeconds = ref(0)
+const visibilitySavingId = ref(null)
 
-/** 面试入口必须携带课程 ID */
+const durationMinutes = computed(() => currentAssignment.value?.duration_minutes || 30)
+const formattedRemaining = computed(() => formatDuration(remainingSeconds.value))
+
+/** 面试入口必须携带课程 ID；教师作业同时关联来源作业 */
 const startBody = computed(() => ({
   course_id: courseId.value,
   focus_kp_ids: [],
+  ...(currentAssignment.value ? { assignment_id: currentAssignment.value.id } : {}),
 }))
 
 onMounted(async () => {
@@ -115,6 +148,9 @@ onMounted(async () => {
   } catch { /* ignore */ }
   try {
     assignments.value = await studentApi.interviewAssignments()
+    const assignmentId = Number(route.query.assignment_id)
+    const assignment = assignments.value.find(a => a.id === assignmentId)
+    if (assignment) startFromAssignment(assignment)
   } catch { /* ignore */ }
 })
 
@@ -123,16 +159,24 @@ function startFromAssignment(assignment) {
     courseId.value = assignment.course_id
   }
   if (!courseId.value) return ElMessage.warning('请先选择课程')
-  startNew()
+  currentAssignment.value = assignment
+  beginInterview()
 }
 
 function onCourseChange() {
   active.value = false
+  currentAssignment.value = null
   records.value = []
 }
 
 function startNew() {
+  currentAssignment.value = null
+  beginInterview()
+}
+
+function beginInterview() {
   if (!courseId.value) return ElMessage.warning('请先选择课程')
+  remainingSeconds.value = durationMinutes.value * 60
   active.value = true
   sessionKey.value++
 }
@@ -151,6 +195,35 @@ watch(showRecords, (v) => {
   if (v && courseId.value) loadRecords()
 })
 
+async function changeVisibility(record, shared) {
+  const visibility = shared ? 'teacher' : 'private'
+  visibilitySavingId.value = record.id
+  try {
+    const data = await studentApi.updateInterviewVisibility(record.id, visibility)
+    Object.assign(record, data)
+    ElMessage.success(visibility === 'teacher' ? '已授权教师查看' : '已设为仅自己可见')
+  } catch { /* 拦截器已提示，保持原状态 */ } finally {
+    visibilitySavingId.value = null
+  }
+}
+
+function dimensionScore(record, label) {
+  try {
+    const dimensions = typeof record.score_dimensions === 'string'
+      ? JSON.parse(record.score_dimensions)
+      : (record.score_dimensions || {})
+    return dimensions[label] ?? '未评分'
+  } catch {
+    return '未评分'
+  }
+}
+
+function formatDuration(totalSeconds) {
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
+
 function formatTime(t) {
   if (!t) return ''
   return new Date(t).toLocaleString('zh-CN', { hour12: false })
@@ -159,6 +232,12 @@ function formatTime(t) {
 
 <style scoped>
 .chat-container { flex: 1; min-height: 0; }
+.interview-time {
+  color: var(--brand-700);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .assignment-panel { margin-bottom: var(--sp-3); }
 .assignment {
   display: flex;
@@ -175,6 +254,23 @@ function formatTime(t) {
 .empty-panel { height: 100%; display: flex; align-items: center; justify-content: center; }
 
 .record-round { margin-bottom: var(--sp-2); }
+.record-scores {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  margin-bottom: var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+.record-visibility {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
 .record-section { margin-bottom: var(--sp-2); }
 .record-label {
   display: block;

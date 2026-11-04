@@ -19,18 +19,20 @@ from app.core.deps import require_student, require_teacher
 from app.db.session import get_db
 from app.models.classroom import ClassMember, Classroom, CourseEnrollment
 from app.models.course import Course, KnowledgePoint
-from app.models.exam import Exam, ExamQuestion, ExamRecord, ExamSession
+from app.models.exam import Exam, ExamPlanDraft, ExamQuestion, ExamRecord, ExamSession
 from app.models.profile import MasteryRecord, ReviewPlan, StudentProfile, WrongQuestion
 from app.models.question import Question, QuestionDraft
 from app.models.user import User
 from app.schemas.exam import (
-    DraftAdoptRequest, DraftGenerateRequest, ExamCreate, ExamHeartbeat, ExamSubmit,
-    QuestionCreate, ShortGradeConfirm,
+    DraftAdoptRequest, DraftGenerateRequest, ExamCreate, ExamHeartbeat, ExamPlanGenerateRequest,
+    ExamSubmit, QuestionCreate, ShortGradeConfirm,
 )
+from app.services.exam_plan_generator import generate_exam_plan, normalize_plan
 from app.services.feature_flags import is_enabled
 from app.services.grader import grade_submission
 from app.services.notifications import notify_task_students
 from app.services.question_generator import generate_questions
+from app.services.write_approval import authorize_write, record_executed
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["题库与考试"])
@@ -190,6 +192,15 @@ def _owned_draft(db: Session, draft_id: int, teacher: User) -> QuestionDraft:
         raise HTTPException(status_code=404, detail="草稿不存在")
     if teacher.role != "admin" and draft.teacher_id != teacher.id:
         raise HTTPException(status_code=403, detail="只能操作自己的草稿")
+    return draft
+
+
+def _owned_plan_draft(db: Session, draft_id: int, teacher: User) -> ExamPlanDraft:
+    draft = db.query(ExamPlanDraft).filter(ExamPlanDraft.id == draft_id).first()
+    if not draft:
+        raise HTTPException(status_code=404, detail="建议草稿不存在")
+    if teacher.role != "admin" and draft.teacher_id != teacher.id:
+        raise HTTPException(status_code=403, detail="只能操作自己的建议草稿")
     return draft
 
 
@@ -437,6 +448,11 @@ def adopt_question_draft(
     if not selected:
         raise HTTPException(status_code=400, detail="请选择要采纳的题目")
 
+    action = authorize_write(
+        db, teacher, "exam.question_adopt", confirmed=True,
+        target_type="question_draft", target_id=draft.id,
+        detail={"course_id": draft.course_id, "selected": len(selected)},
+    )
     created = 0
     for idx in selected:
         raw = items[idx]
@@ -460,6 +476,10 @@ def adopt_question_draft(
         created += 1
 
     draft.status = "adopted"
+    record_executed(
+        db, teacher, action, target_type="question_draft", target_id=draft.id,
+        detail={"created": created},
+    )
     db.commit()
     return {"draft_id": draft.id, "created": created, "status": draft.status}
 
@@ -471,6 +491,115 @@ def discard_question_draft(
     db: Session = Depends(get_db),
 ):
     draft = _owned_draft(db, draft_id, teacher)
+    draft.status = "discarded"
+    db.commit()
+    return {"draft_id": draft.id, "status": draft.status}
+
+
+# ---------- AI 考试科目/考核项建议 ----------
+
+def _plan_out(draft: ExamPlanDraft) -> dict:
+    return {
+        "id": draft.id,
+        "course_id": draft.course_id,
+        "status": draft.status,
+        "created_at": draft.created_at,
+        "plan": json.loads(draft.payload),
+    }
+
+
+@router.post("/teacher/courses/{course_id}/exam-plan-drafts")
+async def create_exam_plan_draft(
+    course_id: int,
+    req: ExamPlanGenerateRequest,
+    teacher: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """按课程知识点生成考试科目/考核项建议草稿(不组卷、不发布)"""
+    course = _owned_course(db, course_id, teacher)
+    if not is_enabled(db, "feature_exams"):
+        raise HTTPException(status_code=403, detail="考试功能已关闭")
+
+    points = [
+        name for (name,) in db.query(KnowledgePoint.name)
+        .filter(KnowledgePoint.course_id == course_id)
+        .limit(30)
+        .all()
+    ]
+    raw = await generate_exam_plan(
+        course.name, points, req.duration_minutes, req.total_score,
+    )
+    try:
+        plan = normalize_plan(raw, req.duration_minutes, req.total_score)
+    except ValueError:
+        raise HTTPException(status_code=502, detail="AI 科目建议生成失败，请重试")
+
+    draft = ExamPlanDraft(
+        teacher_id=teacher.id,
+        course_id=course_id,
+        payload=json.dumps(plan, ensure_ascii=False),
+        status="draft",
+    )
+    db.add(draft)
+    db.commit()
+    db.refresh(draft)
+    logger.info("考试科目建议草稿: %s (course=%s)", draft.id, course_id)
+    return _plan_out(draft)
+
+
+@router.get("/teacher/courses/{course_id}/exam-plan-drafts")
+def list_exam_plan_drafts(
+    course_id: int,
+    status: Optional[str] = Query(None),
+    teacher: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """课程下的建议草稿与已采纳配置;status 可筛选 draft/adopted/discarded"""
+    _owned_course(db, course_id, teacher)
+    query = db.query(ExamPlanDraft).filter(ExamPlanDraft.course_id == course_id)
+    if status in ("draft", "adopted", "discarded"):
+        query = query.filter(ExamPlanDraft.status == status)
+    rows = query.order_by(ExamPlanDraft.id.desc()).limit(20).all()
+    return [_plan_out(row) for row in rows]
+
+
+@router.post("/teacher/exam-plan-drafts/{draft_id}/adopt")
+def adopt_exam_plan_draft(
+    draft_id: int,
+    teacher: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """采纳建议:草稿转为课程考试配置;不生成试卷、不自动发布"""
+    draft = _owned_plan_draft(db, draft_id, teacher)
+    if draft.status == "adopted":
+        raise HTTPException(status_code=400, detail="该建议已采纳")
+    if draft.status == "discarded":
+        raise HTTPException(status_code=400, detail="该建议已丢弃")
+
+    plan = json.loads(draft.payload)
+    action = authorize_write(
+        db, teacher, "exam.plan_adopt", confirmed=True,
+        target_type="exam_plan_draft", target_id=draft.id,
+        detail={"course_id": draft.course_id,
+                "subjects": len(plan.get("subjects") or [])},
+    )
+    draft.status = "adopted"
+    record_executed(
+        db, teacher, action, target_type="exam_plan_draft", target_id=draft.id,
+        detail={"title": plan.get("title"), "total_score": plan.get("total_score")},
+    )
+    db.commit()
+    db.refresh(draft)
+    return _plan_out(draft)
+
+
+@router.delete("/teacher/exam-plan-drafts/{draft_id}")
+def discard_exam_plan_draft(
+    draft_id: int,
+    teacher: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    draft = _owned_plan_draft(db, draft_id, teacher)
     draft.status = "discarded"
     db.commit()
     return {"draft_id": draft.id, "status": draft.status}
@@ -632,16 +761,26 @@ def publish_exam(
     exam_id: int,
     teacher: User = Depends(require_teacher),
     db: Session = Depends(get_db),
+    confirm: bool = False,
 ):
     if not is_enabled(db, "feature_exams"):
         raise HTTPException(status_code=403, detail="考试功能已关闭")
     exam = _owned_exam(db, exam_id, teacher)
     if not db.query(ExamQuestion).filter(ExamQuestion.exam_id == exam.id).first():
         raise HTTPException(status_code=400, detail="试卷没有题目，无法发布")
+    action = authorize_write(
+        db, teacher, "exam.publish", confirmed=confirm,
+        target_type="exam", target_id=exam.id,
+        detail={"title": exam.title, "from": exam.status},
+    )
     exam.status = "published"
     notify_task_students(
         db, "exam", exam.id, exam.title, exam.course_id, exam.class_id,
         f"/student/exams?exam_id={exam.id}",
+    )
+    record_executed(
+        db, teacher, action, target_type="exam", target_id=exam.id,
+        detail={"title": exam.title, "status": "published"},
     )
     db.commit()
     return {"id": exam.id, "status": exam.status}
@@ -652,9 +791,19 @@ def close_exam(
     exam_id: int,
     teacher: User = Depends(require_teacher),
     db: Session = Depends(get_db),
+    confirm: bool = False,
 ):
     exam = _owned_exam(db, exam_id, teacher)
+    action = authorize_write(
+        db, teacher, "exam.close", confirmed=confirm,
+        target_type="exam", target_id=exam.id,
+        detail={"title": exam.title, "from": exam.status},
+    )
     exam.status = "closed"
+    record_executed(
+        db, teacher, action, target_type="exam", target_id=exam.id,
+        detail={"title": exam.title, "status": "closed"},
+    )
     db.commit()
     return {"id": exam.id, "status": exam.status}
 
@@ -883,6 +1032,11 @@ async def ai_grade_exam_record(
     if not short_rows:
         raise HTTPException(status_code=400, detail="该答卷没有简答题")
 
+    action = authorize_write(
+        db, teacher, "exam.ai_grade", confirmed=True,
+        target_type="exam_record", target_id=record.id,
+        detail={"exam_id": exam.id, "short_count": len(short_rows)},
+    )
     answers = _json_obj(record.answers)
     suggestions = {}
     for eq, q in short_rows:
@@ -897,6 +1051,10 @@ async def ai_grade_exam_record(
             "source": result["source"],
         }
     record.ai_suggestions = json.dumps(suggestions, ensure_ascii=False)
+    record_executed(
+        db, teacher, action, target_type="exam_record", target_id=record.id,
+        detail={"suggestions": len(suggestions)},
+    )
     db.commit()
     return {"record_id": record.id, "suggestions": suggestions}
 
@@ -926,12 +1084,21 @@ def confirm_short_scores(
     if not changed:
         raise HTTPException(status_code=400, detail="没有可确认的简答得分")
 
+    action = authorize_write(
+        db, teacher, "exam.score_confirm", confirmed=True,
+        target_type="exam_record", target_id=record.id,
+        detail={"exam_id": exam.id, "changed": changed},
+    )
     record.short_scores = json.dumps(merged, ensure_ascii=False)
     record.graded_at = datetime.utcnow()
     record.graded_by = teacher.id
     view = _build_record_view(record, rows, True)
     record.total_score = view["total"]
     _reflow_wrong_questions(db, record, rows)
+    record_executed(
+        db, teacher, action, target_type="exam_record", target_id=record.id,
+        detail={"total_score": record.total_score, "changed": changed},
+    )
     db.commit()
     return {
         "record_id": record.id,

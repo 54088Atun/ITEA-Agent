@@ -6,7 +6,7 @@
         <p class="page-sub">按知识点归类的错题记录，可结合遗忘曲线安排复习</p>
       </div>
       <div class="page-head__actions">
-        <el-select v-model="courseId" placeholder="选择课程" style="width: 220px" @change="onCourseChange">
+        <el-select v-model="courseId" placeholder="选择课程" filterable style="width: 220px" @change="onCourseChange">
           <el-option v-for="c in courses" :key="c.id" :label="c.name" :value="c.id" />
         </el-select>
         <el-button @click="load" :disabled="!courseId">
@@ -106,6 +106,26 @@
 
     <!-- 生成练习 -->
     <el-dialog v-model="practiceVisible" title="按课程生成练习" width="680px">
+      <div v-if="practiceRecommendation" class="practice-recommendation">
+        <div class="dialog-label">推荐理由</div>
+        <p class="practice-recommendation__reason">
+          {{ practiceRecommendation.reason || '课程基础推荐' }}
+        </p>
+        <div v-if="practiceRecommendation.record_refs?.length" class="practice-references">
+          <div
+            v-for="record in practiceRecommendation.record_refs"
+            :key="`${record.type}-${record.id}`"
+            class="practice-reference"
+          >
+            <el-tag size="small" effect="light">
+              {{ record.type === 'wrong_question' ? '错题记录' : '掌握度记录' }}
+            </el-tag>
+            <span>{{ record.title }}</span>
+            <span class="practice-reference__time">{{ formatTime(record.created_at) }}</span>
+          </div>
+        </div>
+        <div v-else class="practice-recommendation__empty">课程基础推荐，无关联学习记录。</div>
+      </div>
       <div v-if="practiceItems.length">
         <div v-for="(item, i) in practiceItems" :key="i" class="practice-item">
           <div class="practice-item__q">{{ i + 1 }}. {{ item.question }}</div>
@@ -149,6 +169,7 @@ const current = ref(null)
 const generating = ref(false)
 const practiceVisible = ref(false)
 const practiceItems = ref([])
+const practiceRecommendation = ref(null)
 
 const kpCount = computed(() => new Set(records.value.map((r) => r.kp_id).filter((id) => id != null)).size)
 const unclassified = computed(() => records.value.filter((r) => r.kp_id == null).length)
@@ -212,9 +233,11 @@ async function generate() {
   generating.value = true
   practiceVisible.value = true
   practiceItems.value = []
+  practiceRecommendation.value = null
   try {
     const data = await studentApi.generatePractice(courseId.value, 3)
     practiceItems.value = (data.items || []).map((it) => ({ ...it, added: false }))
+    practiceRecommendation.value = data.recommendation || { reason: '课程基础推荐', record_refs: [] }
   } catch {
     practiceVisible.value = false
   } finally {
@@ -238,6 +261,32 @@ async function addToWrong(item) {
 </script>
 
 <style scoped>
+.practice-recommendation {
+  padding: var(--sp-3);
+  margin-bottom: var(--sp-3);
+  background: var(--bg-subtle);
+  border-radius: var(--r-sm);
+}
+.practice-recommendation__reason {
+  margin: 0 0 var(--sp-2);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+.practice-recommendation__empty,
+.practice-reference__time {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+.practice-reference {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  font-size: var(--fs-sm);
+}
+.practice-reference__time { margin-left: auto; }
+
 .practice-item {
   padding: var(--sp-3) 0;
   border-bottom: 1px solid var(--border);

@@ -1,0 +1,10 @@
+# 可选：本地离线图片语义理解（VISION_VLM_MODEL 非空时启用）
+# 安装：pip install -r requirements-vlm.txt
+# 已实测版本：transformers 5.21.0 / torch 2.14.1 / pillow 13.0.0（CPU）
+transformers>=4.45
+torch>=2.2
+pillow>=10.0
+
+# 首次下载模型如遇 HuggingFace 直连失败，可在启动前设置：
+#   HF_ENDPOINT=https://hf-mirror.com
+#   HF_HUB_DISABLE_XET=1

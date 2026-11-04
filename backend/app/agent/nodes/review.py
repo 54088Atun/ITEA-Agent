@@ -6,14 +6,16 @@
 - 生成同考点变式练习题
 - 输出掌握度更新 → 写入 profile_updates 供 memory_write_node 持久化
 """
-import json
 import logging
 from datetime import datetime, timedelta
 
 from app.agent.state import AgentState
 from app.agent.llm import llm_invoke
 from app.agent.prompts import load_prompt, render_prompt
+from app.agent.context import build_rag_context, compress_profile
+from app.agent.data_api import fetch_course_evidence, fetch_profile
 from app.agent.nodes.router import _parse_json
+from app.agent.sources import build_sources
 
 logger = logging.getLogger(__name__)
 
@@ -21,18 +23,30 @@ FORGETTING_INTERVALS = [1, 2, 4, 7, 15, 30]
 
 
 async def review_node(state: AgentState) -> dict:
-    """错题复盘节点"""
+    """错题复盘节点:运行时直接读取学情与课程资料"""
     user_input = state["messages"][-1]["content"] if state.get("messages") else ""
-    snapshot = state.get("profile_snapshot", {})
-    snapshot_str = json.dumps(snapshot, ensure_ascii=False, indent=2) if snapshot else "(暂无学情数据)"
+    course_id = state.get("course_id")
 
-    # 1. 组装 prompt
+    # 1. 直接调用数据 API
+    user_role = state.get("user_role", "student")
+    profile = fetch_profile(state["user_id"], course_id, user_role)
+    snapshot_str = compress_profile(profile)
+    evidence = fetch_course_evidence(user_input, course_id, state["user_id"], user_role)
+    raw_context = evidence.get("context", "")
+    rag_context, _ = build_rag_context(evidence, user_input)
+    sources = build_sources(
+        raw_context, has_profile=bool(profile),
+        fragments=evidence.get("fragments"), course_id=course_id,
+    )
+
     template = load_prompt("review")
     system_prompt = render_prompt(
         template,
         submission=user_input,
         profile_snapshot=snapshot_str,
     )
+    if rag_context:
+        system_prompt += f"\n\n【课程资料参考】\n{rag_context}"
 
     # 反思重写:注入上一轮反思意见
     reflection_notes = state.get("reflection_notes", "")
@@ -55,6 +69,8 @@ async def review_node(state: AgentState) -> dict:
         return {
             "final_output": "复盘服务暂时不可用,请稍后重试。[AI 辅助参考,请师生审核]",
             "profile_updates": {},
+            "rag_context": raw_context,
+            "sources": sources,
         }
 
     # 3. 解析结构化 JSON
@@ -65,7 +81,10 @@ async def review_node(state: AgentState) -> dict:
         output = raw_output
         if "[AI 辅助参考" not in output:
             output += "\n\n[AI 辅助参考,请师生审核]"
-        return {"final_output": output, "profile_updates": {}}
+        return {
+            "final_output": output,
+            "profile_updates": {}, "rag_context": raw_context, "sources": sources,
+        }
 
     # 4. 组装 profile_updates(供 memory_write_node 持久化)
     error_analysis = result.get("error_analysis", {})
@@ -120,4 +139,7 @@ async def review_node(state: AgentState) -> dict:
     logger.info("错题复盘完成(kp=%s, updates=%s)",
                 error_analysis.get("kp_name"), list(profile_updates.keys()))
 
-    return {"final_output": output, "profile_updates": profile_updates}
+    return {
+        "final_output": output, "profile_updates": profile_updates,
+        "rag_context": raw_context, "sources": sources,
+    }

@@ -22,6 +22,7 @@ class UserOut(BaseModel):
     email: str
     status: Optional[str] = "active"
     admin_level: Optional[str] = None
+    avatar_url: Optional[str] = None
 
     class Config:
         from_attributes = True

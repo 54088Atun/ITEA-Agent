@@ -1,0 +1,9 @@
+# 可选:本地离线语音识别(ASR_PROVIDER=local)
+# 安装:pip install -r requirements-asr.txt
+# faster-whisper 1.2.1 的音频解码依赖 av 的 metadata_errors 参数,av 19 已移除,需固定 av 16.x
+faster-whisper>=1.2.1
+av==16.1.0
+
+# 首次下载模型如遇 HuggingFace 直连失败,可在启动前设置:
+#   HF_ENDPOINT=https://hf-mirror.com
+#   HF_HUB_DISABLE_XET=1

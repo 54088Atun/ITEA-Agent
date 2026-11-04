@@ -1,0 +1,197 @@
+/**
+ * 公开首页共享样式
+ * 只服务 HomeView 及其 sections，统一用 .hp- 前缀，避免影响工作台页面
+ */
+
+.hp-container {
+  width: 100%;
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: 0 var(--sp-10);
+}
+
+.hp-section {
+  position: relative;
+  padding: 96px 0;
+}
+
+.hp-section--tight {
+  padding: 64px 0;
+}
+
+.hp-section-head {
+  max-width: 720px;
+  margin-bottom: var(--sp-8);
+}
+
+.hp-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 5px 12px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--brand-300);
+  background: var(--color-primary-wash);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.14em;
+  color: var(--color-primary-active);
+}
+
+.hp-eyebrow::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+}
+
+.hp-title {
+  margin-top: var(--sp-3);
+  font-family: var(--font-serif);
+  font-size: var(--fs-2xl);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+  color: var(--text-primary);
+}
+
+.hp-desc {
+  margin-top: var(--sp-3);
+  font-size: var(--fs-md);
+  line-height: var(--lh-relaxed);
+  color: var(--text-secondary);
+}
+
+/* ===== 按钮 ===== */
+.hp-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  height: 46px;
+  padding: 0 var(--sp-6);
+  border-radius: var(--r-pill);
+  border: 1px solid transparent;
+  font-size: var(--fs-base);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease), box-shadow var(--dur) var(--ease),
+    transform var(--dur) var(--ease-out);
+}
+
+.hp-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+
+.hp-btn--primary {
+  background: var(--grad-brand);
+  color: var(--text-on-brand);
+  box-shadow: 0 10px 24px rgba(36, 104, 158, 0.26);
+}
+
+.hp-btn--primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 14px 30px rgba(36, 104, 158, 0.32);
+  filter: saturate(1.06);
+}
+
+.hp-btn--primary:active {
+  transform: translateY(0);
+  filter: brightness(0.96);
+}
+
+.hp-btn--ghost {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(8px);
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+.hp-btn--ghost:hover {
+  border-color: var(--brand-500);
+  color: var(--color-primary-active);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
+}
+
+.hp-btn--quiet {
+  background: transparent;
+  color: var(--text-primary);
+}
+
+.hp-btn--quiet:hover {
+  background: var(--color-primary-wash);
+  color: var(--color-primary);
+}
+
+/* 锚点跳转时给吸顶导航留出距离 */
+#roles,
+#flow,
+#capabilities,
+#trust,
+#faq {
+  scroll-margin-top: 80px;
+}
+
+.hp-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
+.hp-link:hover {
+  color: var(--color-primary-active);
+}
+
+/* ===== 入场动效：由 v-reveal 指令挂载 ===== */
+.reveal {
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity var(--dur-slow) var(--ease-out), transform var(--dur-slow) var(--ease-out);
+}
+
+.reveal.is-revealed {
+  opacity: 1;
+  transform: none;
+}
+
+@media (max-width: 1024px) {
+  .hp-container {
+    padding: 0 var(--sp-7);
+  }
+
+  .hp-section {
+    padding: 72px 0;
+  }
+}
+
+@media (max-width: 767px) {
+  .hp-container {
+    padding: 0 var(--sp-5);
+  }
+
+  .hp-section {
+    padding: 56px 0;
+  }
+
+  .hp-title {
+    font-size: var(--fs-xl);
+  }
+
+  .hp-desc {
+    font-size: var(--fs-base);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}

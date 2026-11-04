@@ -33,6 +33,25 @@ export const examApi = {
   discardDraft(draftId) {
     return http.delete(`/teacher/question-drafts/${draftId}`)
   },
+  // ---------- 考试科目/考核项建议 ----------
+  createExamPlanDraft(courseId, data) {
+    // {duration_minutes?, total_score?}
+    return http.post(`/teacher/courses/${courseId}/exam-plan-drafts`, data, {
+      timeout: 180000,
+    })
+  },
+  /** status 可选 draft / adopted / discarded */
+  examPlanDrafts(courseId, status) {
+    return http.get(`/teacher/courses/${courseId}/exam-plan-drafts`, {
+      params: status ? { status } : {},
+    })
+  },
+  adoptExamPlanDraft(draftId) {
+    return http.post(`/teacher/exam-plan-drafts/${draftId}/adopt`)
+  },
+  discardExamPlanDraft(draftId) {
+    return http.delete(`/teacher/exam-plan-drafts/${draftId}`)
+  },
   // ---------- 试卷(教师) ----------
   exams() {
     return http.get('/teacher/exams')
@@ -43,11 +62,15 @@ export const examApi = {
   exam(id) {
     return http.get(`/teacher/exams/${id}`)
   },
-  publishExam(id) {
-    return http.post(`/teacher/exams/${id}/publish`)
+  publishExam(id, confirm = false) {
+    return http.post(`/teacher/exams/${id}/publish`, null, {
+      params: { confirm },
+    })
   },
-  closeExam(id) {
-    return http.post(`/teacher/exams/${id}/close`)
+  closeExam(id, confirm = false) {
+    return http.post(`/teacher/exams/${id}/close`, null, {
+      params: { confirm },
+    })
   },
   examResults(id) {
     return http.get(`/teacher/exams/${id}/results`)

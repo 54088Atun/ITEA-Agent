@@ -6,7 +6,7 @@
         <p class="page-sub">查看课程整体学情、薄弱知识点与学生进度，并导出教学文档</p>
       </div>
       <div class="page-head__actions">
-        <el-select v-model="courseId" placeholder="选择课程" style="width: 200px" @change="load">
+        <el-select v-model="courseId" placeholder="选择课程" filterable style="width: 200px" @change="load">
           <el-option v-for="c in courses" :key="c.id" :label="c.name" :value="c.id" />
         </el-select>
         <el-dropdown @command="doExport">

@@ -43,6 +43,15 @@
         <el-table-column label="截止时间" width="170">
           <template #default="{ row }">{{ formatTime(row.due_at) }}</template>
         </el-table-column>
+        <el-table-column label="允许补交" width="110">
+          <template #default="{ row }">
+            <el-switch
+              :model-value="row.allow_late"
+              :loading="allowLateId === row.id"
+              @change="setAllowLate(row, $event)"
+            />
+          </template>
+        </el-table-column>
         <el-table-column label="提交 / 待确认" width="130">
           <template #default="{ row }">
             <span class="count">{{ row.submission_count }}</span>
@@ -82,12 +91,12 @@
           <el-input v-model="form.title" placeholder="如：第三章 等价类划分练习" />
         </el-form-item>
         <el-form-item label="面向班级">
-          <el-select v-model="form.class_id" clearable placeholder="可选，优先按班级发布" style="width: 100%">
+          <el-select v-model="form.class_id" clearable filterable placeholder="可选，仅限所选课程下的班级" style="width: 100%">
             <el-option v-for="c in classes" :key="c.id" :label="`${c.name}（${c.member_count} 人）`" :value="c.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="面向课程">
-          <el-select v-model="form.course_id" clearable placeholder="未选班级时按已选课学生发布" style="width: 100%">
+        <el-form-item label="所属课程" prop="course_id">
+          <el-select v-model="form.course_id" filterable placeholder="必选，作业必须绑定课程" style="width: 100%">
             <el-option v-for="c in courses" :key="c.id" :label="c.name" :value="c.id" />
           </el-select>
         </el-form-item>
@@ -105,6 +114,9 @@
         <el-form-item label="截止天数">
           <el-input-number v-model="form.due_days" :min="1" :max="365" />
           <span class="unit">天（不填则长期有效）</span>
+        </el-form-item>
+        <el-form-item label="允许补交">
+          <el-switch v-model="form.allow_late" active-text="截止后允许正式补交" />
         </el-form-item>
         <el-form-item label="发布状态">
           <el-switch v-model="form.publish" active-text="立即发布" inactive-text="存为草稿" />
@@ -201,10 +213,12 @@ const form = reactive({
   description: '',
   reference_answer: '',
   due_days: 7,
+  allow_late: false,
   publish: true,
 })
 const rules = {
   title: [{ required: true, message: '请输入标题', trigger: 'blur' }],
+  course_id: [{ required: true, message: '请选择课程', trigger: 'change' }],
 }
 
 const drawerVisible = ref(false)
@@ -212,6 +226,7 @@ const detailLoading = ref(false)
 const detail = ref(null)
 const current = ref(null)
 const gradingId = ref(null)
+const allowLateId = ref(null)
 
 const confirmVisible = ref(false)
 const confirming = ref(false)
@@ -259,15 +274,15 @@ function statusTag(s) {
 function openCreate() {
   Object.assign(form, {
     kind: 'homework', title: '', course_id: null, class_id: null,
-    description: '', reference_answer: '', due_days: 7, publish: true,
+    description: '', reference_answer: '', due_days: 7, allow_late: false, publish: true,
   })
   createVisible.value = true
 }
 
 async function submitCreate() {
   await formRef.value.validate()
-  if (!form.course_id && !form.class_id) {
-    return ElMessage.warning('请至少选择班级或课程')
+  if (!form.course_id) {
+    return ElMessage.warning('作业必须绑定课程，请先选择课程')
   }
   saving.value = true
   try {
@@ -279,6 +294,7 @@ async function submitCreate() {
       description: form.description || null,
       reference_answer: form.reference_answer || null,
       due_days: form.due_days || null,
+      allow_late: form.allow_late,
       publish: form.publish,
     })
     ElMessage.success(form.publish ? '已发布' : '已存为草稿')
@@ -291,7 +307,10 @@ async function submitCreate() {
 
 async function publish(row) {
   try {
-    await teacherApi.publishAssignment(row.id)
+    await ElMessageBox.confirm('发布后学生将收到通知并可提交，确定发布？', '发布作业', { type: 'warning' })
+  } catch { return }
+  try {
+    await teacherApi.publishAssignment(row.id, true)
     ElMessage.success('已发布')
     load()
   } catch { /* 拦截器已提示 */ }
@@ -302,10 +321,21 @@ async function close(row) {
     await ElMessageBox.confirm('关闭后学生将无法再提交，确定关闭？', '关闭作业', { type: 'warning' })
   } catch { return }
   try {
-    await teacherApi.closeAssignment(row.id)
+    await teacherApi.closeAssignment(row.id, true)
     ElMessage.success('已关闭')
     load()
   } catch { /* 拦截器已提示 */ }
+}
+
+async function setAllowLate(row, enabled) {
+  allowLateId.value = row.id
+  try {
+    await teacherApi.setAssignmentAllowLate(row.id, enabled)
+    row.allow_late = enabled
+    ElMessage.success(enabled ? '已开放正式补交' : '已关闭补交')
+  } catch { /* 拦截器已提示 */ } finally {
+    allowLateId.value = null
+  }
 }
 
 async function openSubmissions(row) {

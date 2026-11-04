@@ -13,10 +13,17 @@ from app.api.uploads import router as uploads_router
 from app.api.me import router as me_router
 from app.api.assignments import router as assignments_router
 from app.api.course_share import router as course_share_router
+from app.api.course_codes import router as course_codes_router
 from app.api.records import router as records_router
 from app.api.exams import router as exams_router
+from app.api.approvals import router as approvals_router
+from app.api.speech import router as speech_router
+from app.api.site import router as site_router
+from app.api.project import router as project_router
+from app.api.web import router as web_router
 
 api_router = APIRouter(prefix="/api")
+api_router.include_router(site_router)
 api_router.include_router(auth_router)
 api_router.include_router(course_router)
 api_router.include_router(chat_router)
@@ -28,6 +35,11 @@ api_router.include_router(uploads_router)
 api_router.include_router(me_router)
 api_router.include_router(assignments_router)
 api_router.include_router(course_share_router)
+api_router.include_router(course_codes_router)
 api_router.include_router(records_router)
 api_router.include_router(exams_router)
+api_router.include_router(approvals_router)
 api_router.include_router(agent_router)
+api_router.include_router(speech_router)
+api_router.include_router(project_router)
+api_router.include_router(web_router)

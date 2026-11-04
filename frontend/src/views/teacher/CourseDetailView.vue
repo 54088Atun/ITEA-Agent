@@ -62,7 +62,7 @@
             <el-button type="primary" @click="openUpload">
               <el-icon><Upload /></el-icon> 上传资料
             </el-button>
-            <span class="tip">支持 PDF / TXT / MD / DOCX，上传后需在服务端执行入库脚本构建索引</span>
+            <span class="tip">支持 PDF / DOCX / PPTX / XLSX / TXT / MD / CSV / 代码文件；图片需开启识图</span>
             <div class="filter-bar__spacer"></div>
             <span class="filter-bar__count">共 {{ materials.length }} 份资料</span>
           </div>
@@ -82,8 +82,31 @@
                   </el-tag>
                 </template>
               </el-table-column>
+              <el-table-column label="解析" width="130">
+                <template #default="{ row }">
+                  <el-tooltip
+                    :content="row.parse_error || ''"
+                    :disabled="!row.parse_error"
+                    placement="top"
+                  >
+                    <el-tag :type="parseTag(row)" size="small" effect="light">
+                      {{ parseLabel(row) }}
+                    </el-tag>
+                  </el-tooltip>
+                </template>
+              </el-table-column>
               <el-table-column label="上传时间" width="180">
                 <template #default="{ row }">{{ formatTime(row.uploaded_at) }}</template>
+              </el-table-column>
+              <el-table-column label="操作" width="100" fixed="right">
+                <template #default="{ row }">
+                  <el-button
+                    v-if="canRetryParse(row)" link type="primary"
+                    @click="retryParse(row)"
+                  >
+                    重新解析
+                  </el-button>
+                </template>
               </el-table-column>
               <template #empty>
                 <div class="empty-state">暂无教材资料</div>
@@ -187,11 +210,11 @@
           <el-input-number v-model="shareForm.max_uses" :min="1" :max="100" />
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" :loading="sharing" @click="createShare">生成分享码</el-button>
+          <el-button type="primary" :loading="sharing" @click="createShare">生成教师课程码</el-button>
         </el-form-item>
       </el-form>
       <el-table :data="shares" size="small" v-loading="shareLoading">
-        <el-table-column label="分享码" width="140">
+        <el-table-column label="教师课程码" width="140">
           <template #default="{ row }">
             <el-button link type="primary" @click="copyShare(row.code)">{{ row.code }}</el-button>
           </template>
@@ -215,7 +238,7 @@
           </template>
         </el-table-column>
         <template #empty>
-          <div class="empty-state">还没有分享码，设置有效期后点击生成</div>
+          <div class="empty-state">还没有教师课程码，设置有效期后点击生成</div>
         </template>
       </el-table>
       <p class="share-hint">对方凭码复制为课程快照，只包含课程信息、知识点与资料元数据，不会带走本课程的学生、学情与作业数据。</p>
@@ -226,7 +249,7 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { courseApi } from '../../api/course'
 import { teacherApi } from '../../api/teacher'
 import { features, loadFeatures } from '../../stores/features'
@@ -416,13 +439,16 @@ async function loadShares() {
 }
 
 async function createShare() {
+  try {
+    await ElMessageBox.confirm('生成课程码后其他教师可复制本课程快照，确定生成？', '生成课程码', { type: 'warning' })
+  } catch { return }
   sharing.value = true
   try {
     const res = await teacherApi.createShare(courseId, {
       expires_days: shareForm.expires_days,
       max_uses: shareForm.max_uses,
-    })
-    ElMessage.success(`分享码已生成：${res.code}`)
+    }, true)
+    ElMessage.success(`教师课程码已生成：${res.code}`)
     await loadShares()
   } catch { /* 拦截器已提示 */ } finally {
     sharing.value = false
@@ -431,7 +457,10 @@ async function createShare() {
 
 async function revokeShare(row) {
   try {
-    await teacherApi.revokeShare(row.id)
+    await ElMessageBox.confirm('撤销后该课程码立即失效，确定撤销？', '撤销课程码', { type: 'warning' })
+  } catch { return }
+  try {
+    await teacherApi.revokeShare(row.id, true)
     ElMessage.success('已撤销')
     await loadShares()
   } catch { /* 拦截器已提示 */ }
@@ -440,9 +469,9 @@ async function revokeShare(row) {
 async function copyShare(code) {
   try {
     await navigator.clipboard.writeText(code)
-    ElMessage.success('分享码已复制')
+    ElMessage.success('教师课程码已复制')
   } catch {
-    ElMessage.warning(`请手动复制分享码：${code}`)
+    ElMessage.warning(`请手动复制教师课程码：${code}`)
   }
 }
 
@@ -460,8 +489,15 @@ function openUpload() {
 }
 
 function beforeUpload(file) {
-  const ok = ['.pdf', '.txt', '.md', '.docx'].some((ext) => file.name.toLowerCase().endsWith(ext))
-  if (!ok) ElMessage.warning('仅支持 PDF / TXT / MD / DOCX')
+  const allowed = [
+    '.pdf', '.docx', '.pptx', '.xlsx', '.xlsm', '.txt', '.md', '.csv',
+    '.py', '.js', '.ts', '.java', '.c', '.cpp', '.h', '.sql', '.html',
+    '.css', '.vue', '.json', '.xml', '.yml', '.yaml',
+    '.png', '.jpg', '.jpeg', '.webp', '.bmp',
+  ]
+  const name = (file.name || '').toLowerCase()
+  const ok = allowed.some((ext) => name.endsWith(ext))
+  if (!ok) ElMessage.warning('不支持该文件格式，请上传文档、代码或图片')
   if (ok && !uploadForm.title.trim()) {
     uploadForm.title = file.name.replace(/\.[^.]+$/, '')
   }
@@ -473,12 +509,45 @@ async function doUpload({ file }) {
   uploading.value = true
   try {
     await courseApi.uploadMaterial(courseId, uploadForm.type, uploadForm.title, file)
-    ElMessage.success('上传成功')
+    ElMessage.success('上传成功，正在后台解析与审核')
     uploadDialog.value = false
     load()
+    setTimeout(load, 1500)
   } catch { /* 拦截器已提示 */ } finally {
     uploading.value = false
   }
+}
+
+// ---------- 素材解析状态 ----------
+
+function parseLabel(row) {
+  const status = row.parse_status
+  if (status === 'done') return '已解析'
+  if (status === 'processing') return `解析中 ${row.parse_progress || 0}%`
+  if (status === 'pending') return '排队中'
+  if (status === 'rejected') return '审核未通过'
+  if (status === 'failed') return '解析失败'
+  return row.chunk_count > 0 ? '已入库' : '未解析'
+}
+
+function parseTag(row) {
+  if (row.parse_status === 'done') return 'success'
+  if (row.parse_status === 'rejected' || row.parse_status === 'failed') return 'danger'
+  if (row.parse_status) return 'warning'
+  return 'info'
+}
+
+function canRetryParse(row) {
+  return ['failed', 'rejected'].includes(row.parse_status)
+    || (!row.parse_status && !row.chunk_count)
+}
+
+async function retryParse(row) {
+  try {
+    await courseApi.retryMaterialParse(courseId, row.id)
+    ElMessage.success('已重新提交解析')
+    load()
+  } catch { /* 拦截器已提示 */ }
 }
 </script>
 

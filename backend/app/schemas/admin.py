@@ -51,6 +51,38 @@ class ConfigUpdate(BaseModel):
     items: List[ConfigItemUpdate]
 
 
+class SiteContentUpdate(BaseModel):
+    """站点内容:首页与联系页,整体以 JSON 结构保存,缺省表示不修改"""
+    home: Optional[dict] = None
+    contact: Optional[dict] = None
+
+
+class AdminActionPreviewRequest(BaseModel):
+    """管理动作预览:先看影响范围,不写库"""
+    action: str
+    params: dict = Field(default_factory=dict)
+
+
+class AdminActionExecuteRequest(AdminActionPreviewRequest):
+    """确认执行:必须携带预览返回的令牌与幂等键"""
+    confirmation_token: str
+    idempotency_key: str
+
+
+class UserBatchStatusRequest(BaseModel):
+    """批量启用/禁用账号:dry_run 为真时只预演不写库"""
+    user_ids: List[int] = Field(..., min_length=1)
+    status: str = Field(..., pattern="^(active|disabled)$")
+    dry_run: bool = True
+
+
+class CourseBatchAuditRequest(BaseModel):
+    """批量课程审核:dry_run 为真时只预演不写库"""
+    course_ids: List[int] = Field(..., min_length=1)
+    audit_status: str = Field(..., pattern="^(pending|approved|rejected)$")
+    dry_run: bool = True
+
+
 # ---------- 响应 ----------
 
 class UserAdminOut(BaseModel):
@@ -122,6 +154,20 @@ class ConfigItemOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class BatchItemError(BaseModel):
+    """批量操作中未生效的单项及原因"""
+    id: int
+    reason: str
+
+
+class BatchResult(BaseModel):
+    """批量操作结果:生效 / 跳过 / 失败 三分类明细"""
+    affected: List[int] = []
+    skipped: List[BatchItemError] = []
+    failed: List[BatchItemError] = []
+    dry_run: bool = True
 
 
 # ---------- 分页 ----------
