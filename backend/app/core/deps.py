@@ -9,6 +9,17 @@ from app.models.user import User
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 
+def _int_claim(payload: dict, key: str, default: int = 0) -> int | None:
+    """读取整数型声明;缺失用默认值,非法类型返回 None 由调用方按 401 处理"""
+    value = payload.get(key, default)
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
@@ -21,12 +32,17 @@ def get_current_user(
     payload = decode_access_token(token)
     if payload is None:
         raise credentials_exc
-    user_id = int(payload.get("sub", 0))
+    user_id = _int_claim(payload, "sub")
+    if user_id is None:
+        raise credentials_exc
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:
         raise credentials_exc
     # 令牌版本不一致表示已改密或已退出全部设备,旧 JWT 立即失效
-    if int(payload.get("ver", 0)) != int(getattr(user, "token_version", 0) or 0):
+    token_version = _int_claim(payload, "ver")
+    if token_version is None or token_version != int(
+        getattr(user, "token_version", 0) or 0
+    ):
         raise HTTPException(status_code=401, detail="登录状态已失效，请重新登录")
     if getattr(user, "status", "active") == "disabled":
         raise HTTPException(status_code=403, detail="账号已被禁用")

@@ -1,5 +1,5 @@
 <template>
-  <div class="page" v-loading="loading">
+  <div class="page">
     <div class="page-head">
       <div class="page-head__main">
         <el-button link class="back-link" @click="router.back()">
@@ -15,7 +15,42 @@
       </div>
     </div>
 
-    <el-tabs v-model="tab">
+    <template v-if="loading && !course">
+      <div class="panel"><SkeletonTable :rows="6" :cols="4" /></div>
+    </template>
+    <StateBlock v-else-if="error && !course" state="error" title="课程详情加载失败" @retry="load" />
+    <el-tabs v-else v-model="tab">
+      <!-- 基本信息 -->
+      <el-tab-pane label="基本信息" name="info">
+        <div class="tab-body">
+          <div class="panel">
+            <el-form :model="infoForm" label-position="top" class="info-form">
+              <div class="info-grid">
+                <el-form-item label="课程名">
+                  <el-input v-model="infoForm.name" maxlength="100" placeholder="如：数据结构" />
+                </el-form-item>
+                <el-form-item label="课程代码">
+                  <el-input v-model="infoForm.code" maxlength="20" placeholder="如：CS201" />
+                </el-form-item>
+                <el-form-item label="学期">
+                  <el-input v-model="infoForm.semester" maxlength="20" placeholder="如：2026秋季" />
+                </el-form-item>
+              </div>
+              <el-form-item label="课程简介 / 教学大纲">
+                <el-input v-model="infoForm.syllabus" type="textarea" :rows="6" placeholder="选填" />
+              </el-form-item>
+              <el-form-item label="审核状态">
+                <el-tag :type="auditTag(course?.audit_status)" size="small" effect="light">
+                  {{ auditLabel(course?.audit_status) }}
+                </el-tag>
+                <span class="info-hint">课程需平台审核通过后学生才可见</span>
+              </el-form-item>
+              <el-button type="primary" :loading="savingInfo" @click="saveInfo">保存基本信息</el-button>
+            </el-form>
+          </div>
+        </div>
+      </el-tab-pane>
+
       <!-- 知识点 -->
       <el-tab-pane label="知识点体系" name="kp">
         <div class="tab-body">
@@ -48,7 +83,7 @@
               </el-table-column>
               <el-table-column prop="description" label="描述" min-width="240" show-overflow-tooltip />
               <template #empty>
-                <div class="empty-state">暂无知识点</div>
+                <StateBlock state="empty" title="暂无知识点" />
               </template>
             </el-table>
           </div>
@@ -109,7 +144,7 @@
                 </template>
               </el-table-column>
               <template #empty>
-                <div class="empty-state">暂无教材资料</div>
+                <StateBlock state="empty" title="暂无教材资料" />
               </template>
             </el-table>
           </div>
@@ -158,7 +193,7 @@
             :limit="1"
             :before-upload="beforeUpload"
             :http-request="doUpload"
-            accept=".pdf,.txt,.md,.docx"
+            :accept="uploadAccept"
           >
             <el-button type="primary" size="small" :loading="uploading">
               <el-icon><Upload /></el-icon> 选择并上传
@@ -238,7 +273,7 @@
           </template>
         </el-table-column>
         <template #empty>
-          <div class="empty-state">还没有教师课程码，设置有效期后点击生成</div>
+          <StateBlock state="empty" title="还没有教师课程码" hint="设置有效期后点击生成" />
         </template>
       </el-table>
       <p class="share-hint">对方凭码复制为课程快照，只包含课程信息、知识点与资料元数据，不会带走本课程的学生、学情与作业数据。</p>
@@ -253,12 +288,15 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { courseApi } from '../../api/course'
 import { teacherApi } from '../../api/teacher'
 import { features, loadFeatures } from '../../stores/features'
+import SkeletonTable from '../../components/SkeletonTable.vue'
+import StateBlock from '../../components/StateBlock.vue'
 
 const route = useRoute()
 const router = useRouter()
 const courseId = Number(route.params.id)
 
 const loading = ref(true)
+const error = ref(false)
 const course = ref(null)
 const tab = ref('kp')
 const knowledgePoints = ref([])
@@ -268,6 +306,19 @@ const kpDialog = ref(false)
 const kpLoading = ref(false)
 const uploading = ref(false)
 const kpForm = reactive({ name: '', description: '', parentId: null })
+
+// 基本信息
+const infoForm = reactive({ name: '', code: '', semester: '', syllabus: '' })
+const savingInfo = ref(false)
+
+// 上传白名单：accept 与 beforeUpload 共用同一份，避免可选类型与实际校验不一致
+const ACCEPT_EXTS = [
+  '.pdf', '.docx', '.pptx', '.xlsx', '.xlsm', '.txt', '.md', '.csv',
+  '.py', '.js', '.ts', '.java', '.c', '.cpp', '.h', '.sql', '.html',
+  '.css', '.vue', '.json', '.xml', '.yml', '.yaml',
+  '.png', '.jpg', '.jpeg', '.webp', '.bmp',
+]
+const uploadAccept = ACCEPT_EXTS.join(',')
 
 const uploadDialog = ref(false)
 const uploadForm = reactive({ type: 'courseware', title: '' })
@@ -303,6 +354,7 @@ onMounted(() => {
 })
 
 async function load() {
+  error.value = false
   loading.value = true
   try {
     // 后端知识点/素材接口均直接返回数组
@@ -312,10 +364,45 @@ async function load() {
       courseApi.materials(courseId),
     ])
     course.value = c
+    fillInfo(c)
     knowledgePoints.value = Array.isArray(kps) ? kps : []
     materials.value = Array.isArray(mats) ? mats : []
   } catch { /* 拦截器已提示 */ } finally {
     loading.value = false
+  }
+}
+
+function fillInfo(c) {
+  Object.assign(infoForm, {
+    name: c?.name || '',
+    code: c?.code || '',
+    semester: c?.semester || '',
+    syllabus: c?.syllabus || '',
+  })
+}
+
+function auditLabel(s) {
+  return { approved: '已通过', pending: '审核中', rejected: '已驳回' }[s] || '未提交审核'
+}
+
+function auditTag(s) {
+  return { approved: 'success', pending: 'warning', rejected: 'danger' }[s] || 'info'
+}
+
+async function saveInfo() {
+  if (!infoForm.name.trim()) return ElMessage.warning('请输入课程名')
+  savingInfo.value = true
+  try {
+    await teacherApi.updateCourse(courseId, {
+      name: infoForm.name.trim(),
+      code: infoForm.code.trim(),
+      semester: infoForm.semester.trim() || null,
+      syllabus: infoForm.syllabus.trim() || null,
+    })
+    ElMessage.success('课程信息已保存')
+    await load()
+  } catch { /* 拦截器已提示 */ } finally {
+    savingInfo.value = false
   }
 }
 
@@ -489,14 +576,8 @@ function openUpload() {
 }
 
 function beforeUpload(file) {
-  const allowed = [
-    '.pdf', '.docx', '.pptx', '.xlsx', '.xlsm', '.txt', '.md', '.csv',
-    '.py', '.js', '.ts', '.java', '.c', '.cpp', '.h', '.sql', '.html',
-    '.css', '.vue', '.json', '.xml', '.yml', '.yaml',
-    '.png', '.jpg', '.jpeg', '.webp', '.bmp',
-  ]
   const name = (file.name || '').toLowerCase()
-  const ok = allowed.some((ext) => name.endsWith(ext))
+  const ok = ACCEPT_EXTS.some((ext) => name.endsWith(ext))
   if (!ok) ElMessage.warning('不支持该文件格式，请上传文档、代码或图片')
   if (ok && !uploadForm.title.trim()) {
     uploadForm.title = file.name.replace(/\.[^.]+$/, '')
@@ -554,6 +635,13 @@ async function retryParse(row) {
 <style scoped>
 .back-link { padding: 0; margin-bottom: var(--sp-1); color: var(--text-secondary); }
 .tab-body { display: flex; flex-direction: column; gap: var(--sp-4); }
+.info-form :deep(.el-form-item) { margin-bottom: var(--sp-4); }
+.info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0 var(--sp-4);
+}
+.info-hint { margin-left: var(--sp-2); font-size: var(--fs-xs); color: var(--text-secondary); }
 .tip { font-size: var(--fs-xs); color: var(--text-secondary); }
 .draft__file {
   margin-bottom: var(--sp-2);

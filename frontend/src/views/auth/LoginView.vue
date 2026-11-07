@@ -110,7 +110,9 @@ const regRules = {
 }
 
 async function doLogin() {
-  await loginFormRef.value.validate()
+  // 校验失败是正常分支,不能变成未处理的 Promise rejection
+  const valid = await loginFormRef.value.validate().catch(() => false)
+  if (!valid) return
   loading.value = true
   try {
     await userStore.login(loginForm.email, loginForm.password)
@@ -122,7 +124,8 @@ async function doLogin() {
 }
 
 async function doRegister() {
-  await regFormRef.value.validate()
+  const valid = await regFormRef.value.validate().catch(() => false)
+  if (!valid) return
   loading.value = true
   try {
     await userStore.register(regForm)

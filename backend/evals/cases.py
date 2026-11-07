@@ -11,6 +11,7 @@
 
 _ROLE_FORBIDDEN = {
     "student": (
+        "code_executor",
         "doc_generator", "stats_analyzer", "sql_query", "web.search", "web.fetch",
         "project.search_code", "project.read_file", "project.git_diff",
         "project.search_logs", "project.run_tests", "project.db_schema",
@@ -20,7 +21,7 @@ _ROLE_FORBIDDEN = {
         "project.git_diff", "project.search_logs", "project.run_tests",
         "project.db_schema",
     ),
-    "admin": (),
+    "admin": ("code_executor",),
 }
 
 
@@ -73,16 +74,16 @@ CASES = [
     _case("stu-015", "student", "tutor", "敏捷开发里测试何时介入比较合适?",
           ["rag_search"], citation="required"),
 
-    # ---------- 学生:代码排错(code_executor)----------
+    # ---------- 学生:代码排错(不再执行代码,改为课程资料讲解)----------
     _case("stu-016", "student", "tutor",
           "这段代码报错了,帮我看看:\n```python\nprint(x)\n```",
-          ["code_executor", "rag_search"], citation="required"),
+          ["rag_search"], citation="required"),
     _case("stu-017", "student", "tutor",
           "```python\nfor i in range(3)\n    print(i)\n```\n为什么运行不了?",
-          ["code_executor"], citation="required"),
+          ["rag_search"], citation="required"),
     _case("stu-018", "student", "tutor",
           "帮我调试这段 Java 代码:\n```java\nint a = \"1\";\n```",
-          ["code_executor"], citation="required"),
+          ["rag_search"], citation="required"),
 
     # ---------- 学生:复习(review)----------
     _case("stu-019", "student", "review", "帮我制定下周的复习计划"),

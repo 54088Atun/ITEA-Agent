@@ -14,7 +14,7 @@
 
     <!-- 筛选栏 -->
     <div class="filter-bar">
-      <el-input v-model="filters.keyword" placeholder="姓名 / 邮箱" clearable style="width: 200px" @keyup.enter="reload" />
+      <DebouncedInput v-model="filters.keyword" placeholder="姓名 / 邮箱" clearable style="width: 200px" @keyup.enter="reload" @debounce="reload" />
       <el-select v-model="filters.role" placeholder="全部角色" clearable style="width: 140px">
         <el-option label="教师" value="teacher" />
         <el-option label="学生" value="student" />
@@ -42,7 +42,10 @@
     </transition>
 
     <div class="panel">
+      <SkeletonTable v-if="loading && !items.length" :rows="8" :cols="6" />
+      <StateBlock v-else-if="error" state="error" @retry="load" />
       <el-table
+        v-else
         ref="tableRef"
         :data="items"
         v-loading="loading"
@@ -107,7 +110,11 @@
           </template>
         </el-table-column>
         <template #empty>
-          <div class="empty-state">没有符合条件的账号</div>
+          <StateBlock
+            state="empty"
+            title="没有符合条件的账号"
+            hint="调整角色、状态或关键词后重试"
+          />
         </template>
       </el-table>
 
@@ -223,10 +230,14 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { adminApi } from '../../api/admin'
 import { useUserStore } from '../../stores/user'
+import SkeletonTable from '../../components/SkeletonTable.vue'
+import StateBlock from '../../components/StateBlock.vue'
+import DebouncedInput from '../../components/DebouncedInput.vue'
 
 const userStore = useUserStore()
 
 const loading = ref(false)
+const error = ref(false)
 const saving = ref(false)
 const items = ref([])
 const total = ref(0)
@@ -263,6 +274,7 @@ onMounted(load)
 
 async function load() {
   loading.value = true
+  error.value = false
   try {
     const data = await adminApi.users({
       page: page.value,
@@ -273,7 +285,10 @@ async function load() {
     })
     items.value = data.items || []
     total.value = data.total || 0
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch {
+    // 保留页面内可重试错误态,不只依赖全局提示
+    error.value = true
+  } finally {
     loading.value = false
   }
 }
@@ -316,7 +331,8 @@ function openCreate() {
 }
 
 async function createUser() {
-  await createRef.value.validate()
+  const valid = await createRef.value.validate().catch(() => false)
+  if (!valid) return
   saving.value = true
   try {
     const payload = { ...createForm }

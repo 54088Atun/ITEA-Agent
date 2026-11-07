@@ -9,6 +9,7 @@
 - 取消运行回写 cancelled,非本人 403
 """
 from datetime import datetime, timedelta
+from unittest.mock import Mock
 
 import pytest
 from fastapi import HTTPException
@@ -147,6 +148,112 @@ def test_recommendations_prioritize_exam_and_assignment(db):
     assert {"exam", "assignment", "review", "practice"} <= types
     assert result["items"][0]["type"] == "exam"
     assert result["items"][0]["priority"] == "high"
+
+
+def test_complete_review_allows_own_plan(db, monkeypatch):
+    student = db.get(User, 3)
+    plan = db.get(ReviewPlan, 71)
+    previous_review_at = plan.next_review_at
+    commit = Mock(wraps=db.commit)
+    add = Mock(wraps=db.add)
+    monkeypatch.setattr(db, "commit", commit)
+    monkeypatch.setattr(db, "add", add)
+
+    result = student_api.complete_review(71, student=student, db=db)
+
+    assert result["id"] == 71
+    assert result["status"] == "pending"
+    assert plan.review_count == 1
+    assert plan.interval_days == 2
+    assert plan.next_review_at > previous_review_at
+    assert result["next_review_at"] == str(plan.next_review_at)
+    commit.assert_called_once_with()
+    add.assert_not_called()
+    assert db.query(ReviewPlan).count() == 1
+
+
+def test_complete_review_keeps_future_utc_plan_pending(db):
+    """未到期判断按 UTC 比较,避免本地时区(+8)提前完成 8 小时内的计划"""
+    db.add(WrongQuestion(id=73, profile_id=50, question_content="未来错题"))
+    db.add(ReviewPlan(
+        id=73, wrong_question_id=73,
+        next_review_at=datetime.utcnow() + timedelta(hours=1),
+        review_count=0, interval_days=1, status="pending",
+    ))
+    db.commit()
+
+    result = student_api.complete_review(73, student=db.get(User, 3), db=db)
+
+    plan = db.get(ReviewPlan, 73)
+    assert result["status"] == "pending"
+    assert plan.review_count == 0
+    assert plan.interval_days == 1
+    assert plan.next_review_at > datetime.utcnow()
+
+
+def test_complete_review_rejects_other_students_plan_without_writes(db, monkeypatch):
+    db.add(StudentProfile(id=51, user_id=4, course_id=10))
+    db.add(WrongQuestion(id=72, profile_id=51, question_content="他人错题"))
+    db.add(ReviewPlan(
+        id=72, wrong_question_id=72,
+        next_review_at=datetime.utcnow() - timedelta(days=1),
+        review_count=1, interval_days=1, status="pending",
+    ))
+    db.commit()
+    plan = db.get(ReviewPlan, 72)
+    before = (plan.review_count, plan.interval_days, plan.next_review_at, plan.status)
+    commit = Mock(wraps=db.commit)
+    add = Mock(wraps=db.add)
+    monkeypatch.setattr(db, "commit", commit)
+    monkeypatch.setattr(db, "add", add)
+
+    with pytest.raises(HTTPException) as exc:
+        student_api.complete_review(72, student=db.get(User, 3), db=db)
+
+    assert exc.value.status_code == 404
+    assert (plan.review_count, plan.interval_days, plan.next_review_at, plan.status) == before
+    commit.assert_not_called()
+    add.assert_not_called()
+
+
+def test_complete_review_missing_plan_returns_404_without_writes(db, monkeypatch):
+    commit = Mock(wraps=db.commit)
+    add = Mock(wraps=db.add)
+    monkeypatch.setattr(db, "commit", commit)
+    monkeypatch.setattr(db, "add", add)
+
+    with pytest.raises(HTTPException) as exc:
+        student_api.complete_review(999, student=db.get(User, 3), db=db)
+
+    assert exc.value.status_code == 404
+    commit.assert_not_called()
+    add.assert_not_called()
+
+
+@pytest.mark.parametrize("review_count", [0, 5])
+def test_complete_review_repeat_is_success_without_side_effects(db, monkeypatch, review_count):
+    student = db.get(User, 3)
+    plan = db.get(ReviewPlan, 71)
+    plan.review_count = review_count
+    db.commit()
+    commit = Mock(wraps=db.commit)
+    add = Mock(wraps=db.add)
+    monkeypatch.setattr(db, "commit", commit)
+    monkeypatch.setattr(db, "add", add)
+
+    first = student_api.complete_review(71, student=student, db=db)
+    plan = db.get(ReviewPlan, 71)
+    before = (plan.review_count, plan.interval_days, plan.next_review_at, plan.status)
+    commit.reset_mock()
+    add.reset_mock()
+
+    second = student_api.complete_review(71, student=student, db=db)
+
+    assert second == first
+    assert (plan.review_count, plan.interval_days, plan.next_review_at, plan.status) == before
+    commit.assert_not_called()
+    add.assert_not_called()
+    assert db.query(ReviewPlan).count() == 1
 
 
 def test_memory_create_list_and_delete(db):

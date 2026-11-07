@@ -56,9 +56,12 @@
     </div>
 
     <el-drawer v-model="showRecords" title="面试历史记录" size="560px">
-      <div v-loading="loadingRecords">
-        <div v-if="!records.length && !loadingRecords" class="empty-state">暂无记录</div>
-        <el-timeline>
+      <div>
+        <div v-if="loadingRecords && !records.length" class="records-skeleton">
+          <SkeletonCard v-for="n in 3" :key="n" :rows="2" />
+        </div>
+        <StateBlock v-else-if="!records.length" state="empty" title="暂无记录" hint="完成一次面试实训后会记录在这里" />
+        <el-timeline v-else>
           <el-timeline-item v-for="r in records" :key="r.id" :timestamp="formatTime(r.created_at)" placement="top">
             <div class="record">
               <div class="record-round">
@@ -110,6 +113,8 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRoute } from 'vue-router'
 import ChatWindow from '../../components/ChatWindow.vue'
+import SkeletonCard from '../../components/SkeletonCard.vue'
+import StateBlock from '../../components/StateBlock.vue'
 import { studentApi, INTERVIEW_START_URL } from '../../api/student'
 import { courseApi } from '../../api/course'
 import { renderMarkdown } from '../../utils/markdown'
@@ -253,6 +258,11 @@ function formatTime(t) {
 .assignment__meta { font-size: var(--fs-xs); color: var(--text-secondary); }
 .empty-panel { height: 100%; display: flex; align-items: center; justify-content: center; }
 
+.records-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
 .record-round { margin-bottom: var(--sp-2); }
 .record-scores {
   display: flex;

@@ -1,18 +1,27 @@
 <template>
   <div class="chat-shell">
-    <!-- 历史对话固定侧栏 -->
-    <aside v-if="historyEnabled" class="chat-side">
+    <!-- 窄屏历史抽屉遮罩 -->
+    <div
+      v-if="historyEnabled && historyDrawerVisible"
+      class="chat-side__backdrop"
+      @click="historyDrawerVisible = false"
+    ></div>
+    <!-- 历史对话侧栏:桌面固定,900px 以下切换为抽屉 -->
+    <aside
+      v-if="historyEnabled"
+      :class="['chat-side', { 'is-open': historyDrawerVisible }]"
+    >
       <button class="chat-side__new" type="button" @click="newConversation">
         <el-icon><Plus /></el-icon> 新对话
       </button>
       <div class="chat-side__search">
-        <el-input
-          v-model="searchKeyword" size="small" clearable
+        <DebouncedInput
+          v-model="searchKeyword" :delay="300" size="small" clearable
           placeholder="搜索标题或内容"
-          @input="onSearchInput" @clear="loadConversations"
+          @debounce="loadConversations"
         >
           <template #prefix><el-icon><Search /></el-icon></template>
-        </el-input>
+        </DebouncedInput>
       </div>
       <div class="chat-side__tools">
         <template v-if="sessionId">
@@ -23,7 +32,7 @@
       </div>
       <ul class="chat-side__list">
         <li
-          v-for="c in conversations"
+          v-for="c in visibleConversations"
           :key="c.session_id"
           :class="['chat-side__item', { 'is-active': c.session_id === sessionId }]"
           @click="openConversation(c)"
@@ -47,6 +56,7 @@
             <el-icon><Delete /></el-icon>
           </button>
         </li>
+        <li v-if="visibleCount < conversations.length" ref="sentinelRef" class="chat-side__sentinel"></li>
       </ul>
       <p v-if="!conversations.length" class="chat-side__empty">
         {{ searchKeyword ? '没有匹配的对话' : '暂无历史对话' }}
@@ -54,6 +64,12 @@
     </aside>
 
     <div class="chat">
+    <!-- 窄屏历史入口 -->
+    <div v-if="historyEnabled" class="chat__mobile-bar">
+      <button type="button" class="chat__history-btn" @click="historyDrawerVisible = true">
+        <el-icon><Clock /></el-icon> 历史对话
+      </button>
+    </div>
     <!-- ===== 消息流 ===== -->
     <div ref="msgBoxRef" class="chat__scroll" @scroll="onScroll">
       <!-- 空态：只给角色说明 + 快捷提问，不放插画 -->
@@ -124,9 +140,9 @@
               </ul>
             </div>
 
-            <!-- 正文 -->
-            <div v-if="msg.content" class="md-body msg__md" v-html="renderHtml(msg.content)"></div>
-            <span v-if="msg.streaming && msg.content" class="msg__cursor"></span>
+            <!-- 正文：流式走段落缓存，避免逐 token 全文重渲染 -->
+            <div v-if="msgBodyHtml(msg)" class="md-body msg__md" v-html="msgBodyHtml(msg)"></div>
+            <span v-if="msg.streaming && msgBodyHtml(msg)" class="msg__cursor"></span>
 
             <!-- 写操作确认卡片:确认前不产生任何变更 -->
             <div v-if="msg.confirm" :class="['confirm-card', `is-${msg.confirm.status}`]">
@@ -168,8 +184,13 @@
             </div>
 
             <!-- 空流式占位 -->
-            <div v-if="msg.streaming && !msg.content" class="msg__skeleton">
+            <div v-if="msg.streaming && !msgBodyHtml(msg)" class="msg__skeleton">
               <span></span><span></span><span></span>
+            </div>
+
+            <!-- 断线自动恢复中 -->
+            <div v-if="msg.reconnecting" class="msg__reconnecting">
+              连接中断，正在重连…
             </div>
 
             <!-- 错误：内联重试，不弹全局提示 -->
@@ -228,7 +249,7 @@
     <div class="chat__composer">
       <div v-if="pendingImages.length" class="chat__images">
         <div v-for="(img, idx) in pendingImages" :key="img.path" class="chat__image">
-          <img :src="img.path" :alt="`待发送图片${idx + 1}`" />
+          <img :src="resolveAsset(img.path)" :alt="`待发送图片${idx + 1}`" />
           <span class="chat__image-state" :title="img.description || ''">
             {{ img.error ? '识别失败，请补充文字描述' : ((img.text || img.description) ? '已识别图片内容' : '识图未启用，请补充文字描述') }}
           </span>
@@ -266,12 +287,13 @@
           <el-button
             text :loading="uploadingAudio"
             :title="recording ? '结束录音并转写' : '语音输入'"
+            :aria-label="recording ? '结束录音并转写' : '语音输入'"
             :disabled="streaming || interviewExpired" @click="toggleRecording"
           >
             <el-icon :class="{ 'is-recording': recording }"><Microphone /></el-icon>
           </el-button>
           <el-button
-            text :loading="uploadingImage" title="上传图片识题"
+            text :loading="uploadingImage" title="上传图片识题" aria-label="上传图片识题"
             :disabled="streaming || interviewExpired" @click="pickImage"
           >
             <el-icon><Picture /></el-icon>
@@ -285,7 +307,7 @@
             @change="onImageChange"
           />
           <el-button
-            text :loading="uploadingImage" title="拍照上传"
+            text :loading="uploadingImage" title="拍照上传" aria-label="拍照上传"
             :disabled="streaming || interviewExpired" @click="pickCameraImage"
           >
             <el-icon><Camera /></el-icon>
@@ -302,13 +324,13 @@
             <el-icon><EditPen /></el-icon>调整计划
           </el-button>
           <el-button
-            v-if="streaming" circle plain title="停止生成"
+            v-if="streaming" circle plain title="停止生成" aria-label="停止生成"
             class="chat__send" @click="abort"
           >
             <el-icon><VideoPause /></el-icon>
           </el-button>
           <el-button
-            v-else type="primary" circle title="发送" class="chat__send"
+            v-else type="primary" circle title="发送" aria-label="发送" class="chat__send"
             :disabled="interviewExpired || (!input.trim() && !pendingImages.length)"
             @click="send"
           >
@@ -415,18 +437,23 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   User, MagicStick, Loading, CircleCheck, ArrowDown, Plus, Delete,
   CopyDocument, RefreshRight, VideoPause, Promotion, Microphone, Camera,
-  Search, Star, StarFilled, Connection, EditPen, WarningFilled,
+  Search, Star, StarFilled, Connection, EditPen, WarningFilled, Clock,
 } from '@element-plus/icons-vue'
 import DOMPurify from 'dompurify'
 import 'katex/dist/katex.min.css'
-import { ssePost } from '../utils/sse'
+import {
+  ssePost, isRecoverableError, nextBackoffMs, recoveryDeadline,
+  remainingBudgetMs, resolveRequestId, MAX_RECOVERY_ATTEMPTS,
+} from '../utils/sse'
 import { renderMarkdown, highlightAiTag } from '../utils/markdown'
 import { isSpeechSupported, speakMarkdown, stopSpeech } from '../utils/speech.js'
 import { microphoneErrorMessage } from '../utils/media.js'
+import { resolveAsset } from '../utils/asset.js'
 import { chatApi } from '../api/chat'
 import { agentApi } from '../api/agent'
 import { adminApi } from '../api/admin'
 import { uploadApi } from '../api/uploads'
+import DebouncedInput from './DebouncedInput.vue'
 
 const props = defineProps({
   welcome: { type: String, default: '你好!我是你的智能助教,有什么可以帮你?' },
@@ -458,6 +485,8 @@ const streaming = ref(false)
 const msgBoxRef = ref()
 const sessionId = ref('')
 const conversations = ref([])
+// 900px 以下历史侧栏切换为抽屉
+const historyDrawerVisible = ref(false)
 const atBottom = ref(true)
 const imageInput = ref()
 const cameraInput = ref()
@@ -474,11 +503,12 @@ const collaborate = ref(false)
 const summaryVisible = ref(false)
 const summaryText = ref('')
 const summarizing = ref(false)
-let searchTimer = null
 let recorder = null
 let audioChunks = []
 let audioTimer = null
 let controller = null
+// 取消当前消息的续答轮询(停止生成/切换会话/卸载时调用)
+let cancelRecovery = null
 const remainingSeconds = ref(0)
 const interviewExpired = ref(false)
 let interviewTimer = null
@@ -507,6 +537,67 @@ const currentRunId = computed(() => {
 
 function renderHtml(text) {
   return highlightAiTag(renderMarkdown(text))
+}
+
+// ---------- 流式正文段落缓冲 ----------
+// 逐 token 全文重渲染 markdown 会导致代码块/公式反复闪烁；改为按段落缓冲：
+// 遇到完整段落（\n\n）才渲染并追加进 closedHtml 缓存，尾部半截段落单独实时渲染。
+
+/** 初始化某条消息的流式缓冲状态（新建与重试共用） */
+function streamReset(msg) {
+  msg._draft = ''
+  msg._fullText = ''
+  msg.closedHtml = ''
+  msg.tailHtml = ''
+}
+
+/** 检测文本是否落在未闭合的代码块/块级公式内，返回类型或空串 */
+function unclosedBlock(text) {
+  if ((text.match(/```/g) || []).length % 2 === 1) return 'code'
+  if ((text.match(/\$\$/g) || []).length % 2 === 1) return 'math'
+  return ''
+}
+
+/** 未闭合块占位：浅灰提示，避免半截代码/公式闪烁 */
+const streamPendingHtml = (kind) => (
+  `<p class="stream-pending">${kind === 'code' ? '代码块输出中…' : '公式输出中…'}</p>`
+)
+
+/** 冲刷草稿：把完整段落渲染入缓存；final 时收尾并清空尾部 */
+function streamFlush(msg, final) {
+  let draft = msg._draft
+  let searchFrom = 0
+  let idx
+  while ((idx = draft.indexOf('\n\n', searchFrom)) >= 0) {
+    const head = draft.slice(0, idx)
+    // 分割点落在未闭合的 ```/$$ 块内部时跳过（闭合代码块内部含空行属正常）
+    if (unclosedBlock(head)) { searchFrom = idx + 2; continue }
+    if (head.trim()) msg.closedHtml += renderHtml(head)
+    draft = draft.slice(idx + 2)
+    searchFrom = 0
+  }
+  msg._draft = draft
+  if (final) {
+    if (draft.trim()) msg.closedHtml += renderHtml(draft)
+    msg._draft = ''
+    msg.tailHtml = ''
+  } else if (draft.trim()) {
+    const kind = unclosedBlock(draft)
+    msg.tailHtml = kind ? streamPendingHtml(kind) : renderHtml(draft)
+  } else {
+    msg.tailHtml = ''
+  }
+}
+
+/** 消息正文 HTML：流式消息走段落缓存，其余消息按 content 变化做全文渲染缓存 */
+function msgBodyHtml(msg) {
+  if (msg.closedHtml !== undefined && msg.closedHtml !== null) {
+    return (msg.closedHtml || '') + (msg.tailHtml || '')
+  }
+  if (msg._bodySrc === msg.content) return msg._bodyHtml
+  msg._bodySrc = msg.content
+  msg._bodyHtml = renderHtml(msg.content)
+  return msg._bodyHtml
 }
 
 // ---------- 图表渲染(无第三方依赖,输出 SVG) ----------
@@ -983,6 +1074,27 @@ async function toggleSpeech(msg, index) {
 
 // ---------- 历史对话侧栏 ----------
 
+// 会话列表接口全量返回,条数可能超百,分批增量挂载避免长列表一次性渲染卡顿
+const LIST_INITIAL = 60
+const LIST_STEP = 40
+const visibleCount = ref(LIST_INITIAL)
+const visibleConversations = computed(() => conversations.value.slice(0, visibleCount.value))
+const sentinelRef = ref(null)
+let listObserver = null
+
+watch(conversations, () => { visibleCount.value = LIST_INITIAL })
+
+watch(sentinelRef, (el) => {
+  if (!el) return
+  if (!listObserver) {
+    listObserver = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting) visibleCount.value += LIST_STEP
+    }, { rootMargin: '120px' })
+  }
+  listObserver.disconnect()
+  listObserver.observe(el)
+})
+
 async function loadConversations() {
   if (!props.historyEnabled) return
   try {
@@ -990,11 +1102,6 @@ async function loadConversations() {
     const data = await chatApi.conversations(keyword ? { keyword } : {})
     conversations.value = data.items || []
   } catch { /* 历史列表失败不影响当前对话 */ }
-}
-
-function onSearchInput() {
-  clearTimeout(searchTimer)
-  searchTimer = setTimeout(loadConversations, 300)
 }
 
 async function toggleFavorite(item) {
@@ -1037,6 +1144,7 @@ async function exportCurrent() {
 }
 
 async function openConversation(item) {
+  historyDrawerVisible.value = false
   if (streaming.value) return
   stopAnswerSpeech()
   try {
@@ -1054,7 +1162,10 @@ async function openConversation(item) {
 }
 
 function newConversation() {
+  historyDrawerVisible.value = false
   stopAnswerSpeech()
+  cancelRecovery?.()
+  cancelRecovery = null
   controller?.abort()
   controller = null
   streaming.value = false
@@ -1290,6 +1401,7 @@ function runStream(url, body) {
     statusList: [],
     securityLevel: '',
     error: '',
+    reconnecting: false,
     confirm: null,
     interviewSummary: isInterviewSummary(body.message),
   })
@@ -1305,15 +1417,22 @@ function newRequestId() {
 
 /** 把 SSE 事件写入指定助手消息(新建与重试共用) */
 function attachStream(assistantMsg, url, body) {
-  if (!body.request_id) body.request_id = newRequestId()
-  assistantMsg.requestId = body.request_id
+  assistantMsg.requestId = resolveRequestId(body, newRequestId)
+  streamReset(assistantMsg)
   streaming.value = true
   atBottom.value = true
   scrollToBottom()
 
   let recovering = false
   let pending = false
+  let cancelled = false
+  const cancelThis = () => { cancelled = true }
+  cancelRecovery = cancelThis
   const finish = () => {
+    // 收尾：冲刷剩余草稿进段落缓存，并把全文回写 content 供复制/朗读等使用
+    streamFlush(assistantMsg, true)
+    assistantMsg.content = assistantMsg._fullText || assistantMsg.content
+    assistantMsg.reconnecting = false
     assistantMsg.streaming = false
     // 结束后收起处理过程，正文保持主视觉
     if (assistantMsg.statusList.length) assistantMsg.stepsOpen = false
@@ -1321,39 +1440,76 @@ function attachStream(assistantMsg, url, body) {
     atBottom.value = true
     scrollToBottom()
     nextTick(paintRich)
+    if (cancelRecovery === cancelThis) cancelRecovery = null
     if (interviewExpired.value && !autoSummaryStarted) startAutoSummary()
   }
 
-  /** 连接中断或重复请求仍在生成时，按同一幂等键恢复完整答案 */
-  const recoverAnswer = async () => {
+  const wait = (ms) => new Promise(resolve => setTimeout(resolve, Math.max(0, ms)))
+
+  /** 连接中断或重复请求仍在生成时，按同一幂等键在预算内恢复完整答案 */
+  const recoverAnswer = async (showReconnectHint = false) => {
     if (recovering) return
     recovering = true
     assistantMsg.error = ''
+    if (showReconnectHint) assistantMsg.reconnecting = true
     assistantMsg.streaming = true
     streaming.value = true
+    const deadline = recoveryDeadline()
     try {
-      for (let attempt = 0; attempt < 120; attempt += 1) {
-        const data = await chatApi.answer(assistantMsg.requestId)
-        if (data.session_id) sessionId.value = data.session_id
-        if (data.security_level) assistantMsg.securityLevel = data.security_level
-        if (data.status === 'done' || data.status === 'blocked') {
-          assistantMsg.content = data.content || '(未收到回复,请重试)'
-          finish()
-          loadConversations()
-          return
+      let attempt = 0
+      let polls = 0
+      while (
+        !cancelled && polls < MAX_RECOVERY_ATTEMPTS
+        && remainingBudgetMs(deadline) > 0
+      ) {
+        polls += 1
+        try {
+          const data = await chatApi.answer(assistantMsg.requestId)
+          if (data.session_id) sessionId.value = data.session_id
+          if (data.security_level) assistantMsg.securityLevel = data.security_level
+          if (data.status === 'done' || data.status === 'blocked') {
+            // 整段回放：先清空流式缓冲，正文走 content 渲染路径
+            assistantMsg.closedHtml = undefined
+            assistantMsg.tailHtml = undefined
+            assistantMsg._draft = ''
+            assistantMsg._fullText = ''
+            assistantMsg.content = data.content || '(未收到回复,请重试)'
+            finish()
+            loadConversations()
+            return
+          }
+          if (data.status === 'cancelled') {
+            assistantMsg.closedHtml = undefined
+            assistantMsg.tailHtml = undefined
+            assistantMsg._draft = ''
+            assistantMsg._fullText = ''
+            assistantMsg.content = data.content || '(任务已取消)'
+            finish()
+            return
+          }
+          if (data.status === 'error') {
+            throw new Error(data.error || '回答生成失败，请重试')
+          }
+        } catch (err) {
+          // 401/403 等确定性错误不重试，交由调用方统一处理
+          if (!isRecoverableError(err)) throw err
+          const backoff = Math.min(
+            nextBackoffMs(attempt), remainingBudgetMs(deadline),
+          )
+          if (backoff <= 0) break
+          attempt += 1
+          await wait(backoff)
+          continue
         }
-        if (data.status === 'cancelled') {
-          assistantMsg.content = data.content || '(任务已取消)'
-          finish()
-          return
-        }
-        if (data.status === 'error') {
-          throw new Error(data.error || '回答生成失败，请重试')
-        }
-        await new Promise(resolve => setTimeout(resolve, 2000))
+        const pause = Math.min(2000, remainingBudgetMs(deadline))
+        if (pause <= 0) break
+        await wait(pause)
       }
-      throw new Error('续答等待超时，请稍后重试')
+      if (cancelled) return
+      throw new Error('连接中断，自动恢复超时，请点击重试')
     } catch (err) {
+      if (cancelled) return
+      assistantMsg.reconnecting = false
       assistantMsg.error = err.response?.data?.detail || err.message || '连接失败，请检查网络后重试'
       finish()
     } finally {
@@ -1459,11 +1615,14 @@ function attachStream(assistantMsg, url, body) {
           type: 'success', icon: 'EditPen', text: `计划已调整:${text}`,
         })
       } else if (type === 'token') {
-        assistantMsg.content += data.content
+        // 段落级缓冲：token 只进草稿，遇到完整段落才渲染，避免全文重渲染闪烁
+        assistantMsg._draft += data.content
+        assistantMsg._fullText += data.content
+        streamFlush(assistantMsg, false)
         if (atBottom.value) scrollToBottom()
       } else if (type === 'reset') {
         // 反思校验未通过：后端会带意见重写，先丢弃已流出的草稿
-        assistantMsg.content = ''
+        streamReset(assistantMsg)
       } else if (type === 'security') {
         assistantMsg.securityLevel = data.level || ''
         if (data.blocked) {
@@ -1476,7 +1635,9 @@ function attachStream(assistantMsg, url, body) {
         if (data.message?.includes('相同请求正在处理中')) {
           pending = true
         } else {
-          assistantMsg.content += `\n\n> ⚠️ ${data.message}`
+          assistantMsg._draft += `\n\n> ⚠️ ${data.message}`
+          assistantMsg._fullText += `\n\n> ⚠️ ${data.message}`
+          streamFlush(assistantMsg, false)
         }
       }
     },
@@ -1485,14 +1646,30 @@ function attachStream(assistantMsg, url, body) {
         recoverAnswer()
         return
       }
-      if (!assistantMsg.content) {
+      if (!assistantMsg._fullText && !assistantMsg.content) {
         assistantMsg.content = '(未收到回复,请重试)'
       }
       finish()
       loadConversations()
     },
-    onError() {
-      recoverAnswer()
+    onError(err) {
+      // 401 与全局拦截器一致:清除登录态并跳转登录
+      if (err?.status === 401) {
+        localStorage.removeItem('itea_token')
+        localStorage.removeItem('itea_user')
+        assistantMsg.error = '登录已失效，请重新登录'
+        finish()
+        if (location.pathname !== '/login') location.href = '/login'
+        return
+      }
+      // 403 及其余确定性 4xx 不自动恢复,避免无意义轮询
+      if (!isRecoverableError(err)) {
+        assistantMsg.error = err?.message || '请求失败，请稍后重试'
+        finish()
+        return
+      }
+      // 网络断开/5xx:显示重连提示,预算内自动恢复
+      recoverAnswer(true)
     },
   })
 }
@@ -1513,11 +1690,13 @@ onMounted(() => {
 // 否则请求会在后端继续生成，长时间占用 LLM 调用与数据库连接，最终拖垮整个服务。
 onBeforeUnmount(() => {
   stopAnswerSpeech()
+  cancelRecovery?.()
+  cancelRecovery = null
   controller?.abort()
   controller = null
-  clearTimeout(searchTimer)
   clearInterval(interviewTimer)
   releaseRecorder()
+  listObserver?.disconnect()
 })
 
 function abort() {
@@ -1526,12 +1705,21 @@ function abort() {
   if (last?.runId) {
     agentApi.cancelRun(last.runId).catch(() => {})
   }
+  cancelRecovery?.()
+  cancelRecovery = null
   controller?.abort()
   streaming.value = false
   if (last?.streaming) {
     last.streaming = false
+    last.reconnecting = false
     if (last.statusList?.length) last.stepsOpen = false
-    if (!last.content) last.content = '(已停止生成)'
+    // ssePost 捕获 AbortError 后直接返回不触发 finish，需自行冲刷缓冲并回写全文
+    if (last.closedHtml !== undefined && last.closedHtml !== null) {
+      streamFlush(last, true)
+      last.content = last._fullText || '(已停止生成)'
+    } else if (!last.content) {
+      last.content = '(已停止生成)'
+    }
   }
   if (interviewExpired.value && !autoSummaryStarted) startAutoSummary()
 }
@@ -1645,6 +1833,7 @@ async function copy(text) {
   padding: 0;
   list-style: none;
 }
+.chat-side__sentinel { height: 1px; }
 .chat-side__item {
   display: flex;
   align-items: center;
@@ -1679,11 +1868,16 @@ async function copy(text) {
   background: none;
   color: var(--text-placeholder);
   cursor: pointer;
-  opacity: 0;
+  opacity: 0.45;
   transition: opacity var(--dur-fast) var(--ease);
 }
 .chat-side__item:hover .chat-side__del {
   opacity: 1;
+}
+@media (hover: none) {
+  .chat-side__del {
+    opacity: 1;
+  }
 }
 .chat-side__del:hover {
   color: var(--danger-600);
@@ -1718,12 +1912,17 @@ async function copy(text) {
   background: none;
   color: var(--text-placeholder);
   cursor: pointer;
-  opacity: 0;
+  opacity: 0.45;
   transition: opacity var(--dur-fast) var(--ease);
 }
 .chat-side__item:hover .chat-side__star,
 .chat-side__star.is-on {
   opacity: 1;
+}
+@media (hover: none) {
+  .chat-side__star {
+    opacity: 1;
+  }
 }
 .chat-side__star.is-on {
   color: var(--color-warning, #d48806);
@@ -1999,10 +2198,22 @@ async function copy(text) {
   margin-left: 2px;
   vertical-align: text-bottom;
   background: var(--brand-600);
-  animation: blink 1s steps(2, start) infinite;
+  /* 方案 2.4：打字光标呼吸闪烁，比硬切 blink 更柔和 */
+  animation: cursorBreath 1s var(--ease) infinite;
 }
-@keyframes blink {
-  50% { opacity: 0; }
+@keyframes cursorBreath {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.15; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .msg__cursor { animation: none; }
+}
+
+/* 未闭合代码块/公式的流式占位：浅灰提示，避免半截内容闪烁 */
+.stream-pending {
+  margin: var(--sp-2) 0;
+  font-size: var(--fs-xs);
+  color: var(--text-tertiary, var(--text-secondary));
 }
 
 /* 流式占位：三点呼吸，避免空白闪烁 */
@@ -2159,15 +2370,33 @@ async function copy(text) {
   background: var(--color-danger-soft);
   border-radius: var(--r-sm);
 }
+/* 断线自动恢复中的进行时提示 */
+.msg__reconnecting {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-xs);
+  color: var(--warning-600);
+  background: var(--color-warning-soft);
+  border-radius: var(--r-sm);
+}
 .msg__actions {
   display: flex;
   gap: var(--sp-1);
   margin-top: var(--sp-3);
-  opacity: 0;
+  /* 触屏没有 hover,操作条必须常显;桌面端弱化存在感,悬浮恢复 */
+  opacity: 0.6;
   transition: opacity var(--dur-fast) var(--ease);
 }
-.msg--assistant:hover .msg__actions {
+.msg:hover .msg__actions {
   opacity: 1;
+}
+@media (hover: none) {
+  .msg__actions {
+    opacity: 1;
+  }
 }
 .msg__action {
   display: inline-flex;
@@ -2279,8 +2508,53 @@ async function copy(text) {
   color: var(--color-danger, #d9534f);
 }
 
+.chat-side__backdrop,
+.chat__mobile-bar {
+  display: none;
+}
+.chat__mobile-bar {
+  padding: 8px 12px 0;
+}
+
 @media (max-width: 900px) {
-  .chat-side { display: none; }
+  /* 历史侧栏切换为抽屉:复用同一列表与加载/切换逻辑 */
+  .chat-side {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 2001;
+    width: min(86vw, 320px);
+    flex: none;
+    border-radius: 0;
+    transform: translateX(-100%);
+    transition: transform var(--dur) var(--ease);
+  }
+  .chat-side.is-open {
+    transform: translateX(0);
+  }
+  .chat-side__backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    background: rgba(0, 0, 0, 0.42);
+  }
+  .chat__mobile-bar {
+    display: flex;
+  }
+  .chat__history-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 36px;
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--bg-topbar);
+    color: var(--text-secondary);
+    font-size: var(--fs-xs);
+    cursor: pointer;
+  }
   .chat__scroll { padding: var(--sp-4); }
   .msg--assistant .msg__main { max-width: 100%; }
   .msg__bubble { max-width: 88%; }
@@ -2389,6 +2663,12 @@ async function copy(text) {
   border: none;
   border-right: 1px solid var(--border);
   border-radius: 0;
+}
+@media (max-width: 900px) {
+  .chat-side {
+    width: min(86vw, 320px);
+    flex: none;
+  }
 }
 .chat-side__new {
   justify-content: flex-start;

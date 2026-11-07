@@ -9,6 +9,7 @@
 
         <nav class="contact-nav__links" aria-label="联系我们导航">
           <a href="#channels">联系方式</a>
+          <a href="#message">在线留言</a>
           <a href="#departments">对接人</a>
           <a href="#contact-faq">常见问题</a>
         </nav>
@@ -87,6 +88,65 @@
         </div>
       </section>
 
+      <!-- 在线留言：左侧联系方式，右侧留言表单（无写接口，提交生成邮件草稿） -->
+      <section id="message" class="contact-section">
+        <div class="hp-container">
+          <div class="hp-section-head" v-reveal>
+            <span class="hp-eyebrow">在线留言</span>
+            <h2 class="hp-title">写下来，我们按类转交</h2>
+            <p class="hp-desc">提交后会为你打开邮件客户端并填好内容，确认无误后发送即可。</p>
+          </div>
+
+          <div class="contact-message" v-reveal>
+            <aside class="contact-message__info">
+              <h3>联系方式</h3>
+              <ul>
+                <li v-for="channel in contact.channels" :key="channel.label">
+                  <span class="contact-message__label">{{ channel.label }}</span>
+                  <a v-if="channel.href" :href="channel.href">{{ channel.value }}</a>
+                  <strong v-else>{{ channel.value }}</strong>
+                  <small>{{ channel.hint }}</small>
+                </li>
+              </ul>
+              <p class="contact-message__tip">留言按问题类型转给对应负责人，工作日内回复；紧急问题建议直接打电话。</p>
+            </aside>
+
+            <form class="contact-message__form" @submit.prevent="submitMessage">
+              <div class="contact-message__row">
+                <label>
+                  <span>称呼</span>
+                  <input v-model.trim="messageForm.name" type="text" placeholder="怎么称呼你" required />
+                </label>
+                <label>
+                  <span>邮箱</span>
+                  <input v-model.trim="messageForm.email" type="email" placeholder="name@campus.edu" required />
+                </label>
+              </div>
+              <label>
+                <span>问题类型</span>
+                <select v-model="messageForm.type">
+                  <option v-for="dept in contact.departments" :key="dept.name" :value="dept.name">
+                    {{ dept.name }} · {{ dept.desc }}
+                  </option>
+                </select>
+              </label>
+              <label>
+                <span>留言内容</span>
+                <textarea
+                  v-model.trim="messageForm.content"
+                  rows="5"
+                  placeholder="问题、所在页面和时间，越具体越好"
+                  required
+                ></textarea>
+              </label>
+              <button type="submit" class="hp-btn hp-btn--primary contact-message__submit" :disabled="messageSending">
+                {{ messageSending ? '正在生成邮件…' : '提交留言' }}
+              </button>
+            </form>
+          </div>
+        </div>
+      </section>
+
       <section id="departments" class="contact-section contact-section--subtle">
         <div class="hp-container">
           <div class="hp-section-head" v-reveal>
@@ -148,7 +208,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useSiteStore } from '../../stores/site'
 import { useUserStore } from '../../stores/user'
@@ -169,6 +229,35 @@ const primaryMailto = computed(() => {
 })
 
 const primaryEmail = computed(() => primaryMailto.value.replace(/^mailto:/, ''))
+
+// 在线留言：后端无提交接口，提交时生成对应负责人邮箱的邮件草稿
+const messageForm = reactive({
+  name: '',
+  email: '',
+  type: contact.departments[0]?.name || '',
+  content: '',
+})
+const messageSending = ref(false)
+
+function submitMessage() {
+  if (messageSending.value) return
+  messageSending.value = true
+  const dept = contact.departments.find((item) => item.name === messageForm.type)
+  const to = dept?.contact || primaryEmail.value
+  const subject = `[${messageForm.type}] ${messageForm.name} 的留言`
+  const body = [
+    `称呼：${messageForm.name}`,
+    `邮箱：${messageForm.email}`,
+    `问题类型：${messageForm.type}`,
+    '',
+    messageForm.content,
+  ].join('\n')
+  window.setTimeout(() => {
+    messageSending.value = false
+    window.location.href = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
+    ElMessage.success('已为你打开邮件客户端，确认内容后发送即可')
+  }, 400)
+}
 
 async function copyEmail() {
   try {
@@ -424,6 +513,141 @@ a.contact-channel:hover {
   color: var(--text-secondary);
 }
 
+/* ===== 在线留言 ===== */
+.contact-message {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: var(--sp-8);
+  max-width: 960px;
+  margin: 0 auto;
+  padding: var(--sp-7);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow: var(--shadow-md);
+}
+
+.contact-message__info h3 {
+  font-family: var(--font-serif);
+  font-size: var(--fs-lg);
+  color: var(--text-primary);
+}
+
+.contact-message__info ul {
+  margin-top: var(--sp-4);
+  list-style: none;
+}
+
+.contact-message__info li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-3) 0;
+  border-bottom: 1px dashed var(--border);
+}
+
+.contact-message__info li:last-child {
+  border-bottom: none;
+}
+
+.contact-message__label {
+  font-size: var(--fs-xs);
+  letter-spacing: 0.08em;
+  color: var(--text-placeholder);
+}
+
+.contact-message__info a,
+.contact-message__info strong {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.contact-message__info a {
+  color: var(--color-primary);
+}
+
+.contact-message__info small {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+
+.contact-message__tip {
+  margin-top: var(--sp-4);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-base);
+  color: var(--text-secondary);
+}
+
+.contact-message__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.contact-message__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-4);
+}
+
+.contact-message__form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.contact-message__form label > span {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+
+.contact-message__form input,
+.contact-message__form select,
+.contact-message__form textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--bg-page);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  font-family: inherit;
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+
+.contact-message__form input:focus,
+.contact-message__form select:focus,
+.contact-message__form textarea:focus {
+  outline: none;
+  border-color: var(--brand-500);
+  box-shadow: 0 0 0 3px var(--color-primary-wash);
+}
+
+.contact-message__form textarea {
+  resize: vertical;
+  min-height: 120px;
+}
+
+.contact-message__submit {
+  align-self: flex-start;
+  height: 40px;
+  padding: 0 var(--sp-6);
+}
+
+.contact-message__submit[disabled] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@media (max-width: 960px) {
+  .contact-message {
+    grid-template-columns: 1fr;
+    gap: var(--sp-6);
+    padding: var(--sp-5);
+  }
+}
+
 /* ===== 对接人 ===== */
 .contact-depts {
   display: grid;
@@ -599,7 +823,8 @@ a.contact-channel:hover {
   }
 
   .contact-channels,
-  .contact-depts {
+  .contact-depts,
+  .contact-message__row {
     grid-template-columns: 1fr;
   }
 

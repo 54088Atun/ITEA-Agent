@@ -24,11 +24,21 @@
       <div class="empty-state">请先在右上角选择一门课程</div>
     </div>
 
-    <div v-else v-loading="loading" class="plan-wrap">
-      <div v-if="!plans.length && !loading" class="panel">
-        <div class="empty-state">
-          {{ statusFilter === 'done' ? '还没有已完成的复习计划' : '暂无复习计划，做错题目后会自动排程' }}
-        </div>
+    <div v-else class="plan-wrap">
+      <div v-if="error" class="panel">
+        <StateBlock state="error" @retry="load" />
+      </div>
+
+      <div v-else-if="loading && !plans.length" class="plan-grid">
+        <SkeletonCard v-for="n in 4" :key="n" :rows="3" />
+      </div>
+
+      <div v-else-if="!plans.length" class="panel">
+        <StateBlock
+          state="empty"
+          :title="statusFilter === 'done' ? '还没有已完成的复习计划' : '暂无复习计划'"
+          hint="做错题目后会自动排程"
+        />
       </div>
 
       <div v-else class="plan-grid">
@@ -80,12 +90,15 @@ import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { studentApi } from '../../api/student'
 import { courseApi } from '../../api/course'
+import SkeletonCard from '../../components/SkeletonCard.vue'
+import StateBlock from '../../components/StateBlock.vue'
 
 const courses = ref([])
 const courseId = ref(null)
 const plans = ref([])
 const statusFilter = ref('pending')
 const loading = ref(false)
+const error = ref(false)
 
 onMounted(async () => {
   try {
@@ -101,9 +114,12 @@ onMounted(async () => {
 async function load() {
   if (!courseId.value) return
   loading.value = true
+  error.value = false
   try {
     plans.value = await studentApi.reviewPlans(courseId.value, statusFilter.value)
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch {
+    error.value = true
+  } finally {
     loading.value = false
   }
 }
@@ -203,4 +219,10 @@ function formatTime(t) {
   border-top: 1px solid var(--border);
 }
 .plan__hint { font-size: var(--fs-xs); color: var(--text-placeholder); }
+
+/* 窄屏单列，避免 360px 最小列宽撑出横向滚动 */
+@media (max-width: 480px) {
+  .plan-grid { grid-template-columns: 1fr; }
+}
+
 </style>

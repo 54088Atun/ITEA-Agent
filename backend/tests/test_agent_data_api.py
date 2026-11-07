@@ -4,6 +4,8 @@ import json
 from datetime import datetime
 from types import SimpleNamespace
 
+import pytest
+
 import app.agent.data_api as data_api
 import app.agent.internal_api as internal_api
 from app.agent.nodes import collab as collab_module
@@ -145,6 +147,37 @@ def test_review_and_interview_use_direct_profile(monkeypatch):
     assert "DIRECT-RAG" in captured["interview"]
     assert "DIRECT-PROFILE" in captured["interview"]
     assert "SNAPSHOT-PROFILE" not in captured["interview"]
+
+
+@pytest.mark.parametrize("mastery,kp_name,delta,expected", [
+    ([{"point": "二叉树", "level": 0.8}], "二叉树", -10, 0.7),
+    ([{"point": "二叉树", "level": 0.1}], "二叉树", -20, 0.0),
+    ([{"point": "二叉树", "level": 0.95}], "二叉树", 10, 1.0),
+    ([{"point": "二叉树遍历", "level": 0.7}], "二叉树", -10, 0.6),
+    ([{"point": "其他知识点", "level": 0.9}], "二叉树", -10, 0.4),
+    ([], "二叉树", 0, 0.5),
+])
+def test_review_mastery_uses_real_baseline(monkeypatch, mastery, kp_name, delta, expected):
+    """掌握度以学情基线计算,仅无历史记录时从 0.5 起算"""
+    monkeypatch.setattr(review_module, "fetch_profile",
+                        lambda *a, **k: {"mastery": mastery})
+    monkeypatch.setattr(
+        review_module, "fetch_course_evidence",
+        lambda *a, **k: {"context": "", "fragments": []},
+    )
+
+    async def fake_llm(messages, temperature=None, sink=None):
+        return json.dumps({
+            "error_analysis": {"kp_name": kp_name, "error_type": "概念不清", "explanation": ""},
+            "mastery_update": {"delta": delta},
+            "review_plan": {"next_review_at": "2026-11-01"},
+            "variant_question": {},
+        })
+
+    monkeypatch.setattr(review_module, "llm_invoke", fake_llm)
+    result = asyncio.run(review_module.review_node(_state(branch="review")))
+
+    assert result["profile_updates"]["mastery_updates"][0]["mastery_level"] == pytest.approx(expected)
 
 
 def test_collab_expert_uses_direct_data_api(monkeypatch):

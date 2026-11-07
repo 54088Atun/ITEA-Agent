@@ -30,8 +30,12 @@ def _split_plan(plan) -> tuple[str, list[dict]]:
     return ("" if plan is None else str(plan)), []
 
 
-async def _execute(call: dict, state) -> dict:
-    """执行单个工具,统一超时、重试与异常降级"""
+async def _execute(call: dict, state, approval=None, quota=None) -> dict:
+    """执行单个工具,统一超时、重试与异常降级
+
+    权限、确认、参数与配额全部复用 tool_executor 的共享执行边界,
+    本函数只负责超时与可重试降级。
+    """
     # 延迟导入:tool_executor 经由 nodes 包间接依赖 tutor,顶层导入会形成循环
     from app.agent.nodes.tool_executor import _execute_single
     from app.agent.tools.gateway import (
@@ -47,7 +51,10 @@ async def _execute(call: dict, state) -> dict:
         started = time.perf_counter()
         try:
             result = await asyncio.wait_for(
-                asyncio.to_thread(_execute_single, payload, state),
+                asyncio.to_thread(
+                    _execute_single, payload, state,
+                    approval=approval, quota=quota,
+                ),
                 timeout=timeout,
             )
         except asyncio.TimeoutError:
@@ -72,7 +79,7 @@ async def _execute(call: dict, state) -> dict:
 
 
 async def _run_calls(calls: list[dict], history: list[dict], state,
-                     trace: list[dict]) -> None:
+                     trace: list[dict], approval=None, quota=None) -> None:
     """批量执行一轮工具调用,按 assistant(tool_calls) + tool 消息回灌"""
     prepared: list[dict] = []
     for index, call in enumerate(calls):
@@ -90,7 +97,7 @@ async def _run_calls(calls: list[dict], history: list[dict], state,
     })
 
     for item in prepared:
-        result = await _execute(item, state)
+        result = await _execute(item, state, approval=approval, quota=quota)
         trace.append({
             "name": item["name"],
             "arguments": item["arguments"],
@@ -116,6 +123,7 @@ async def run_tool_loop(
     planner,
     tools: list[dict],
     forced_call: dict | None = None,
+    approval=None,
     max_steps: int = MAX_TOOL_STEPS,
     sink=None,
 ) -> tuple[str, list[dict]]:
@@ -123,19 +131,31 @@ async def run_tool_loop(
 
     planner(messages, tools) -> str | ToolPlan:模型决策
     forced_call: 进入模型决策前强制执行的工具(如课程事实题保底检索)
+    approval: 服务端可信审批上下文,只有它能放行需确认的高危工具;
+              模型给出的 calls/arguments 无法伪造确认。
     """
+    from app.agent.tools.gateway import TurnQuota, coerce_tool_approval
+
     history = [dict(message) for message in messages]
     trace: list[dict] = []
+    approved = coerce_tool_approval(approval)
+    # 整个工具循环共用一个配额,跨轮次累计,避免分轮绕过单轮上限
+    quota = TurnQuota()
 
     if forced_call:
-        await _run_calls([forced_call], history, state, trace)
+        await _run_calls(
+            [forced_call], history, state, trace,
+            approval=approved, quota=quota,
+        )
 
     for _ in range(max_steps):
         plan = await planner(history, tools)
         content, calls = _split_plan(plan)
         if not calls:
             return content, trace
-        await _run_calls(calls, history, state, trace)
+        await _run_calls(
+            calls, history, state, trace, approval=approved, quota=quota,
+        )
 
     logger.warning(
         "工具循环达到步数上限 %s,强制收尾(session=%s)",

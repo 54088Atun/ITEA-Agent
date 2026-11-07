@@ -8,7 +8,9 @@
     </div>
 
     <div class="panel">
-      <el-table :data="exams" v-loading="loading">
+      <SkeletonTable v-if="loading && !exams.length" :rows="6" :cols="6" />
+      <StateBlock v-else-if="error" state="error" @retry="load" />
+      <el-table v-else :data="exams">
         <el-table-column prop="title" label="试卷" min-width="220" />
         <el-table-column label="课程" width="160">
           <template #default="{ row }">{{ row.course_name || '—' }}</template>
@@ -41,7 +43,11 @@
           </template>
         </el-table-column>
         <template #empty>
-          <div class="empty-state">暂无考试，教师发布后会出现在这里</div>
+          <StateBlock
+            state="empty"
+            title="暂无考试"
+            hint="教师发布试卷后会出现在这里"
+          />
         </template>
       </el-table>
     </div>
@@ -52,7 +58,7 @@
           <el-tag size="small" effect="light">总分 {{ detail.total_score }}</el-tag>
           <el-tag size="small" effect="light">时长 {{ detail.duration_minutes }} 分钟</el-tag>
           <span class="dim">截止：{{ formatTime(detail.due_at) }}</span>
-          <el-tag v-if="!detail.my_record && remaining > 0" type="warning" size="small" effect="dark">
+          <el-tag v-if="!detail.my_record && remaining > 0" type="warning" size="small" effect="dark" class="exam__countdown">
             剩余 {{ countdownText }}
           </el-tag>
           <el-tag v-if="!detail.my_record && violations" type="danger" size="small" effect="light">
@@ -97,7 +103,7 @@
             v-if="q.type === 'single'"
             v-model="answers[q.id]" class="question__options" :disabled="submitted"
           >
-            <el-radio v-for="op in q.options" :key="op.key" :label="op.key">
+            <el-radio v-for="op in q.options" :key="op.key" :value="op.key">
               {{ op.key }}. {{ op.text }}
             </el-radio>
           </el-radio-group>
@@ -106,7 +112,7 @@
             v-else-if="q.type === 'multiple'"
             v-model="answers[q.id]" class="question__options" :disabled="submitted"
           >
-            <el-checkbox v-for="op in q.options" :key="op.key" :label="op.key">
+            <el-checkbox v-for="op in q.options" :key="op.key" :value="op.key">
               {{ op.key }}. {{ op.text }}
             </el-checkbox>
           </el-checkbox-group>
@@ -115,8 +121,8 @@
             v-else-if="q.type === 'judge'"
             v-model="answers[q.id]" class="question__options" :disabled="submitted"
           >
-            <el-radio label="true">正确</el-radio>
-            <el-radio label="false">错误</el-radio>
+            <el-radio value="true">正确</el-radio>
+            <el-radio value="false">错误</el-radio>
           </el-radio-group>
 
           <el-input
@@ -169,7 +175,7 @@
           >
             提交答卷
           </el-button>
-          <span v-if="!detail.my_record && remaining > 0" class="dim">
+          <span v-if="!detail.my_record && remaining > 0" class="dim exam__countdown">
             剩余时间 {{ countdownText }}，超时将自动提交
           </span>
           <span v-if="detail.my_record" class="dim">
@@ -194,9 +200,13 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { examApi } from '../../api/exams'
+import { countUnanswered } from '../../utils/exam'
+import SkeletonTable from '../../components/SkeletonTable.vue'
+import StateBlock from '../../components/StateBlock.vue'
 
 const exams = ref([])
 const loading = ref(false)
+const error = ref(false)
 const drawerVisible = ref(false)
 const detailLoading = ref(false)
 const detail = ref(null)
@@ -226,10 +236,13 @@ onMounted(load)
 
 async function load() {
   loading.value = true
+  error.value = false
   try {
     const rows = await examApi.myExams()
     exams.value = Array.isArray(rows) ? rows : []
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch {
+    error.value = true
+  } finally {
     loading.value = false
   }
 }
@@ -415,8 +428,13 @@ function displayAnswer(q, value) {
 
 async function submit(auto = false) {
   if (!auto) {
+    // 仅手动提交给出未答提示;自动交卷不新增确认阻断
+    const unanswered = countUnanswered(detail.value.questions, answers.value)
+    const message = unanswered > 0
+      ? `还有 ${unanswered} 道题未作答，提交后不可修改，确定提交答卷？`
+      : '提交后不可修改，确定提交答卷？'
     try {
-      await ElMessageBox.confirm('提交后不可修改，确定提交答卷？', '提交确认', { type: 'warning' })
+      await ElMessageBox.confirm(message, '提交确认', { type: 'warning' })
     } catch { return }
   }
   const payload = {}
@@ -440,6 +458,7 @@ async function submit(auto = false) {
 
 <style scoped>
 .dim { color: var(--text-placeholder); }
+.exam__countdown { font-variant-numeric: tabular-nums; }
 .exam { display: flex; flex-direction: column; gap: var(--sp-3); }
 .exam__meta { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; font-size: var(--fs-xs); }
 .exam__desc { font-size: var(--fs-sm); color: var(--text-secondary); white-space: pre-wrap; }

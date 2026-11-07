@@ -108,3 +108,40 @@ def test_disable_account_revokes_old_token(db):
     with pytest.raises(HTTPException) as exc:
         get_current_user(token, db)
     assert exc.value.status_code in (401, 403)
+
+
+# ---------- 畸形 JWT sub ----------
+
+def _raw_token(claims: dict) -> str:
+    from datetime import datetime, timedelta, timezone
+
+    from jose import jwt
+
+    from app.core.config import settings
+
+    payload = {
+        "role": "student",
+        "ver": 0,
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=5),
+    }
+    payload.update(claims)
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
+@pytest.mark.parametrize(
+    "sub", ["abc", "", None, [3], {"id": 3}, True],
+    ids=["text", "empty", "null", "list", "dict", "bool"],
+)
+def test_malformed_sub_returns_401_not_500(db, sub):
+    with pytest.raises(HTTPException) as exc:
+        get_current_user(_raw_token({"sub": sub}), db)
+
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "无效的认证凭据"
+
+
+def test_missing_sub_returns_401(db):
+    with pytest.raises(HTTPException) as exc:
+        get_current_user(_raw_token({}), db)
+
+    assert exc.value.status_code == 401

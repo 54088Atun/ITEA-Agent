@@ -53,6 +53,11 @@ class WrongQuestion(Base):
 class ReviewPlan(Base):
     """复习计划表 —— 遗忘曲线驱动"""
     __tablename__ = "review_plans"
+    __table_args__ = (
+        UniqueConstraint(
+            "wrong_question_id", "next_review_at", name="uq_review_plan_slot",
+        ),
+    )
 
     id = Column(BigIntPK, primary_key=True, autoincrement=True)
     wrong_question_id = Column(BigInteger, ForeignKey("wrong_questions.id"), nullable=False, index=True)

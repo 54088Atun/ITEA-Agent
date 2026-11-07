@@ -15,7 +15,7 @@
       <el-tab-pane label="课程审核" name="audit">
         <div class="tab-body">
           <div class="filter-bar">
-            <el-input v-model="filters.keyword" placeholder="课程名 / 课程代码" clearable style="width: 200px" @keyup.enter="reload" />
+            <DebouncedInput v-model="filters.keyword" placeholder="课程名 / 课程代码" clearable style="width: 200px" @keyup.enter="reload" @debounce="reload" />
             <el-input v-model="filters.semester" placeholder="学期" clearable style="width: 130px" @keyup.enter="reload" />
             <el-select v-model="filters.audit_status" placeholder="全部审核状态" clearable style="width: 160px">
               <el-option label="待审核" value="pending" />
@@ -36,7 +36,10 @@
           </transition>
 
           <div class="panel">
+            <SkeletonTable v-if="loading && !courses.length" :rows="8" :cols="6" />
+            <StateBlock v-else-if="error" state="error" @retry="load" />
             <el-table
+              v-else
               ref="tableRef"
               :data="courses"
               v-loading="loading"
@@ -75,7 +78,11 @@
                 </template>
               </el-table-column>
               <template #empty>
-                <div class="empty-state">没有符合条件的课程</div>
+                <StateBlock
+                  state="empty"
+                  title="没有符合条件的课程"
+                  hint="调整审核状态、学期或关键词后重试"
+                />
               </template>
             </el-table>
 
@@ -107,7 +114,14 @@
           </div>
 
           <div class="panel">
-            <el-table :data="materials" v-loading="materialLoading">
+            <SkeletonTable v-if="materialLoading && !materials.length" :rows="6" :cols="5" />
+            <StateBlock
+              v-else-if="materialError"
+              state="error"
+              title="素材加载失败"
+              @retry="loadMaterials"
+            />
+            <el-table v-else :data="materials">
               <el-table-column prop="id" label="ID" width="70" />
               <el-table-column prop="course_id" label="课程ID" width="90" />
               <el-table-column prop="title" label="资料标题" min-width="200" />
@@ -126,7 +140,7 @@
                 </template>
               </el-table-column>
               <template #empty>
-                <div class="empty-state">暂无课程素材</div>
+                <StateBlock state="empty" title="暂无课程素材" />
               </template>
             </el-table>
 
@@ -153,6 +167,9 @@ import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { adminApi } from '../../api/admin'
 import { useUserStore } from '../../stores/user'
+import SkeletonTable from '../../components/SkeletonTable.vue'
+import StateBlock from '../../components/StateBlock.vue'
+import DebouncedInput from '../../components/DebouncedInput.vue'
 
 const userStore = useUserStore()
 
@@ -160,6 +177,7 @@ const tab = ref('audit')
 
 // ---------- 课程审核 ----------
 const loading = ref(false)
+const error = ref(false)
 const courses = ref([])
 const total = ref(0)
 const page = ref(1)
@@ -172,6 +190,7 @@ const pendingCount = computed(() => courses.value.filter((c) => c.audit_status =
 
 // ---------- 素材管理 ----------
 const materialLoading = ref(false)
+const materialError = ref(false)
 const materials = ref([])
 const materialTotal = ref(0)
 const materialPage = ref(1)
@@ -185,6 +204,7 @@ onMounted(async () => {
 
 async function load() {
   loading.value = true
+  error.value = false
   try {
     const data = await adminApi.courses({
       page: page.value,
@@ -195,7 +215,9 @@ async function load() {
     })
     courses.value = data.items || []
     total.value = data.total || 0
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch {
+    error.value = true
+  } finally {
     loading.value = false
   }
 }
@@ -269,6 +291,7 @@ function auditTag(s) {
 
 // ---------- 素材 ----------
 async function loadMaterials() {
+  materialError.value = false
   materialLoading.value = true
   try {
     const data = await adminApi.materials({
@@ -278,7 +301,7 @@ async function loadMaterials() {
     })
     materials.value = data.items || []
     materialTotal.value = data.total || 0
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch { materialError.value = true } finally {
     materialLoading.value = false
   }
 }

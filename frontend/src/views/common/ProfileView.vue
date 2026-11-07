@@ -10,7 +10,7 @@
 
       <div class="profile-meta">
         <div class="profile-avatar">
-          <img v-if="avatarUrl" :src="avatarUrl" alt="头像" />
+          <img v-if="avatarUrl" :src="resolveAsset(avatarUrl)" alt="头像" />
           <span v-else>{{ initial }}</span>
         </div>
         <div>
@@ -94,8 +94,17 @@
     <!-- 学生:学习记录 -->
     <div v-if="userStore.isStudent" class="profile-card">
       <p class="card-title">学习记录</p>
-      <div v-loading="recordsLoading" class="timeline-wrap">
-        <el-timeline v-if="records.length">
+      <div class="timeline-wrap">
+        <div v-if="recordsLoading && !records.length" class="timeline-skeleton">
+          <SkeletonCard v-for="n in 3" :key="n" :rows="2" />
+        </div>
+        <StateBlock
+          v-else-if="recordsError"
+          state="error"
+          title="学习记录加载失败"
+          @retry="loadRecords"
+        />
+        <el-timeline v-else-if="records.length">
           <el-timeline-item
             v-for="(e, i) in records" :key="i"
             :timestamp="formatTime(e.created_at)" placement="top"
@@ -112,7 +121,7 @@
             </div>
           </el-timeline-item>
         </el-timeline>
-        <el-empty v-else-if="!recordsLoading" description="暂无学习记录" />
+        <StateBlock v-else state="empty" title="暂无学习记录" hint="完成作业、考试或复习后会记录在这里" />
       </div>
     </div>
 
@@ -127,7 +136,14 @@
           <el-option v-for="c in classes" :key="c.id" :label="c.name" :value="c.id" />
         </el-select>
       </div>
-      <el-table :data="publishRows" size="small" v-loading="publishLoading">
+      <SkeletonTable v-if="publishLoading && !publishRows.length" :rows="5" :cols="5" />
+      <StateBlock
+        v-else-if="publishError"
+        state="error"
+        title="发布记录加载失败"
+        @retry="loadPublish"
+      />
+      <el-table v-else :data="publishRows" size="small">
         <el-table-column label="类型" width="90">
           <template #default="{ row }">
             <el-tag :type="publishTag(row)" size="small" effect="light">
@@ -154,7 +170,7 @@
           <template #default="{ row }">{{ formatTime(row.due_at) }}</template>
         </el-table-column>
         <template #empty>
-          <div class="empty-state">暂无发布记录</div>
+          <StateBlock state="empty" title="暂无发布记录" hint="发布作业或考试后会出现在这里" />
         </template>
       </el-table>
     </div>
@@ -165,17 +181,26 @@
         <p class="card-title">我的识图图片</p>
         <el-button text size="small" :loading="imagesLoading" @click="loadImages">刷新</el-button>
       </div>
-      <div v-loading="imagesLoading">
-        <div v-if="images.length" class="image-grid">
+      <div>
+        <div v-if="imagesLoading && !images.length" class="image-grid">
+          <SkeletonCard v-for="n in 4" :key="n" :rows="2" />
+        </div>
+        <StateBlock
+          v-else-if="imagesError"
+          state="error"
+          title="识图图片加载失败"
+          @retry="loadImages"
+        />
+        <div v-else-if="images.length" class="image-grid">
           <div v-for="img in images" :key="img.filename" class="image-item">
-            <img :src="img.path" :alt="img.filename" />
+            <img :src="resolveAsset(img.path)" :alt="img.filename" />
             <div class="image-meta">
               <span>{{ formatTime(img.created_at) }}</span>
               <el-button text type="danger" size="small" @click="removeImage(img)">删除</el-button>
             </div>
           </div>
         </div>
-        <el-empty v-else-if="!imagesLoading" description="暂无识图图片" :image-size="60" />
+        <StateBlock v-else state="empty" title="暂无识图图片" hint="在对话中拍照识图后会出现在这里" />
       </div>
       <p class="hint">识图原图保留 30 天后自动清理，也可在此提前删除。</p>
     </div>
@@ -227,7 +252,11 @@ import { meApi } from '../../api/me'
 import { recordsApi } from '../../api/records'
 import { classroomApi } from '../../api/classroom'
 import { uploadApi } from '../../api/uploads'
+import { resolveAsset } from '../../utils/asset.js'
 import { useUserStore } from '../../stores/user'
+import SkeletonCard from '../../components/SkeletonCard.vue'
+import SkeletonTable from '../../components/SkeletonTable.vue'
+import StateBlock from '../../components/StateBlock.vue'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -249,13 +278,16 @@ const loggingOutAll = ref(false)
 
 const records = ref([])
 const recordsLoading = ref(false)
+const recordsError = ref(false)
 const publishRows = ref([])
 const publishLoading = ref(false)
+const publishError = ref(false)
 const classes = ref([])
 const classFilter = ref(null)
 
 const images = ref([])
 const imagesLoading = ref(false)
+const imagesError = ref(false)
 
 const exporting = ref(false)
 const deactivateVisible = ref(false)
@@ -378,11 +410,12 @@ async function logoutAllDevices() {
 // ---------- 学习记录 ----------
 
 async function loadRecords() {
+  recordsError.value = false
   recordsLoading.value = true
   try {
     const rows = await recordsApi.studentRecords(50)
     records.value = Array.isArray(rows) ? rows : []
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch { recordsError.value = true } finally {
     recordsLoading.value = false
   }
 }
@@ -411,11 +444,12 @@ async function loadClasses() {
 }
 
 async function loadPublish() {
+  publishError.value = false
   publishLoading.value = true
   try {
     const rows = await recordsApi.teacherPublishRecords(classFilter.value, 50)
     publishRows.value = Array.isArray(rows) ? rows : []
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch { publishError.value = true } finally {
     publishLoading.value = false
   }
 }
@@ -440,11 +474,12 @@ function statusLabel(s) {
 // ---------- 识图图片自助管理 ----------
 
 async function loadImages() {
+  imagesError.value = false
   imagesLoading.value = true
   try {
     const data = await uploadApi.listMine()
     images.value = data.items || []
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch { imagesError.value = true } finally {
     imagesLoading.value = false
   }
 }
@@ -587,6 +622,11 @@ function formatTime(t) {
   margin-bottom: var(--sp-3);
 }
 .timeline-wrap { min-height: 80px; }
+.timeline-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
 .image-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
@@ -627,4 +667,11 @@ function formatTime(t) {
 .hint { font-size: var(--fs-xs); color: var(--text-secondary); line-height: var(--lh-base); }
 .dim { color: var(--text-placeholder); }
 .mt { margin-top: var(--sp-4); }
+
+/* 窄屏收紧卡片留白，保证居中卡片列不挤压内容 */
+@media (max-width: 640px) {
+  .profile-page { padding: 24px 12px; }
+  .profile-card { padding: 20px 16px; }
+  .data-actions { flex-wrap: wrap; }
+}
 </style>

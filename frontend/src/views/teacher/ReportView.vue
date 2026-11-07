@@ -1,5 +1,5 @@
 <template>
-  <div class="page" v-loading="loading">
+  <div class="page">
     <div class="page-head">
       <div class="page-head__main">
         <h2 class="page-title">班级看板</h2>
@@ -24,22 +24,34 @@
       </div>
     </div>
 
-    <template v-if="report">
+    <template v-if="loading && !report">
+      <div class="panel">
+        <SkeletonTable :rows="2" :cols="3" />
+      </div>
+      <div class="panel">
+        <SkeletonTable :rows="6" :cols="4" />
+      </div>
+      <div class="panel">
+        <SkeletonTable :rows="6" :cols="4" />
+      </div>
+    </template>
+    <StateBlock v-else-if="error && !report" state="error" title="班级看板加载失败" @retry="load" />
+    <template v-else-if="report">
       <!-- 概览（avg_progress 已是 0-100） -->
       <div class="kpi-grid">
         <div class="kpi">
           <div class="kpi__label">平均进度</div>
-          <div class="kpi__value">{{ Math.round(report.avg_progress || 0) }}<span class="kpi__unit">%</span></div>
+          <div class="kpi__value"><CountUp :value="Math.round(report.avg_progress || 0)" /><span class="kpi__unit">%</span></div>
           <el-progress :percentage="clamp(report.avg_progress)" :show-text="false" :stroke-width="6" />
         </div>
         <div class="kpi">
           <div class="kpi__label">学生总数</div>
-          <div class="kpi__value">{{ report.student_count || report.students?.length || 0 }}<span class="kpi__unit">人</span></div>
+          <div class="kpi__value"><CountUp :value="report.student_count || report.students?.length || 0" /><span class="kpi__unit">人</span></div>
           <div class="kpi__hint">已加入本课程的学生</div>
         </div>
         <div class="kpi">
           <div class="kpi__label">薄弱知识点数</div>
-          <div class="kpi__value kpi__value--weak">{{ report.weak_points?.length || 0 }}<span class="kpi__unit">个</span></div>
+          <div class="kpi__value kpi__value--weak"><CountUp :value="report.weak_points?.length || 0" /><span class="kpi__unit">个</span></div>
           <div class="kpi__hint">平均掌握度低于阈值</div>
         </div>
       </div>
@@ -63,7 +75,7 @@
           </el-table-column>
           <el-table-column prop="wrong_count" label="错题人次" width="110" />
           <template #empty>
-            <div class="empty-state">暂无薄弱知识点</div>
+            <StateBlock state="empty" title="暂无薄弱知识点" />
           </template>
         </el-table>
       </div>
@@ -88,13 +100,13 @@
           </el-table-column>
           <el-table-column prop="weak_count" label="薄弱知识点数" width="130" />
           <template #empty>
-            <div class="empty-state">暂无学生数据</div>
+            <StateBlock state="empty" title="暂无学生数据" />
           </template>
         </el-table>
       </div>
     </template>
 
-    <div v-else-if="!loading" class="empty-state">选择课程后查看班级看板</div>
+    <div v-else-if="!loading && !error" class="empty-state">选择课程后查看班级看板</div>
   </div>
 </template>
 
@@ -102,8 +114,12 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { teacherApi } from '../../api/teacher'
+import SkeletonTable from '../../components/SkeletonTable.vue'
+import StateBlock from '../../components/StateBlock.vue'
+import CountUp from '../../components/CountUp.vue'
 
 const loading = ref(false)
+const error = ref(false)
 const courses = ref([])
 const courseId = ref(null)
 const report = ref(null)
@@ -123,10 +139,11 @@ onMounted(async () => {
 
 async function load() {
   if (!courseId.value) return
+  error.value = false
   loading.value = true
   try {
     report.value = await teacherApi.classReport(courseId.value)
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch { error.value = true } finally {
     loading.value = false
   }
 }

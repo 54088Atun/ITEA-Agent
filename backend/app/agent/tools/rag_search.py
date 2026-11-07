@@ -218,7 +218,10 @@ def rag_search(
     top_k: int = 5,
     user_id: Optional[int] = None,
 ) -> dict:
-    """知识库检索工具
+    """知识库检索工具(仅在已构建课程 FAISS 索引时可用)
+
+    课程事实题应优先使用 `course_evidence`(复用课程检索 API);本工具用于
+    已显式构建索引的场景,未配置索引或依赖缺失时返回明确不可用,不伪造来源。
 
     Args:
         query: 检索问题
@@ -228,7 +231,8 @@ def rag_search(
         user_id: 调用者 ID,用于课程范围强校验(缺失即拒绝)
 
     Returns:
-        {"fragments": [{"text", "source", "scope", "score"}, ...], "context": "拼接文本"}
+        {"fragments": [...], "context": "拼接文本"} 或
+        {"fragments": [], "context": "(...)", "error": "index_unavailable|retrieval_failed"}
     """
     scope_error = agent_course_scope_error(user_id, course_id)
     if scope_error:
@@ -239,6 +243,14 @@ def rag_search(
         }
     try:
         manager = get_manager()
+        load_index = getattr(manager, "load_index", None)
+        if callable(load_index) and not load_index(course_id):
+            logger.warning("课程 %s 未配置检索索引,返回不可用", course_id)
+            return {
+                "fragments": [],
+                "context": "(检索不可用: 课程索引未配置)",
+                "error": "index_unavailable",
+            }
         fragments = manager.search(query, course_id, scope, top_k)
         # 拼接为带来源标注的上下文文本,供 prompt 注入与反思层校验
         context_parts = [
@@ -251,4 +263,8 @@ def rag_search(
         }
     except Exception as e:
         logger.error("rag_search 执行失败: %s", e)
-        return {"fragments": [], "context": f"(检索失败: {e})"}
+        return {
+            "fragments": [],
+            "context": "(检索不可用: 检索服务异常)",
+            "error": "retrieval_failed",
+        }

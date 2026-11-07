@@ -10,17 +10,34 @@ import logging
 import sys
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings, BASE_DIR
+from app.core.cors import configure_cors
 from app.core.log_sanitizer import SensitiveLogFilter
+from app.core.request_context import RequestContextMiddleware, RequestIdLogFilter
 
+
+def _ensure_utf8_streams() -> None:
+    """Windows 控制台默认 GBK,统一改为 UTF-8,避免中文/异常日志编码失败"""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not callable(reconfigure):
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass
+
+
+_ensure_utf8_streams()
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    format="%(asctime)s [%(levelname)s] [%(request_id)s] %(name)s: %(message)s",
 )
 for handler in logging.getLogger().handlers:
+    if not any(isinstance(item, RequestIdLogFilter) for item in handler.filters):
+        handler.addFilter(RequestIdLogFilter())
     if not any(isinstance(item, SensitiveLogFilter) for item in handler.filters):
         handler.addFilter(SensitiveLogFilter())
 logger = logging.getLogger(__name__)
@@ -37,14 +54,10 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# ---------- CORS(允许前端跨域) ----------
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # 生产环境应限定域名
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# ---------- CORS(仅允许显式配置的前端来源) ----------
+configure_cors(app)
+# 请求级 request_id:日志/审计/上传拒绝/通知/轨迹共用同一标识
+app.add_middleware(RequestContextMiddleware)
 
 
 # ---------- 启动事件 ----------

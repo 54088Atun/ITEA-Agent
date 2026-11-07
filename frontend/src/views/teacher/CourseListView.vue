@@ -24,16 +24,16 @@
         <el-option label="已归档" value="archived" />
         <el-option label="回收站" value="deleted" />
       </el-select>
-      <el-input
+      <DebouncedInput
         v-model="filters.keyword"
         placeholder="搜索课程名 / 课程代码"
         clearable
         style="width: 240px"
         @keyup.enter="load"
-        @clear="load"
+        @debounce="load"
       >
         <template #prefix><el-icon><Search /></el-icon></template>
-      </el-input>
+      </DebouncedInput>
       <el-select
         v-model="filters.semester" placeholder="全部学期" clearable
         style="width: 160px" @change="load"
@@ -52,7 +52,13 @@
       <el-button v-if="hasFilters" text @click="clearFilters">清除筛选</el-button>
     </div>
 
-    <div v-if="courses.length" class="course-grid">
+    <div v-if="loading && !courses.length" class="course-grid">
+      <SkeletonCard v-for="n in 4" :key="n" :rows="3" />
+    </div>
+    <div v-else-if="error" class="panel">
+      <StateBlock state="error" @retry="load" />
+    </div>
+    <div v-else-if="courses.length" class="course-grid">
       <article
         v-for="c in courses" :key="c.id" class="course"
         @click="filters.lifecycle !== 'deleted' && goDetail(c.id)"
@@ -223,10 +229,14 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { courseApi } from '../../api/course'
 import { teacherApi } from '../../api/teacher'
 import { codeApi } from '../../api/codes'
+import SkeletonCard from '../../components/SkeletonCard.vue'
+import StateBlock from '../../components/StateBlock.vue'
+import DebouncedInput from '../../components/DebouncedInput.vue'
 
 const router = useRouter()
 const courses = ref([])
 const loading = ref(false)
+const error = ref(false)
 const dialogVisible = ref(false)
 const creating = ref(false)
 const formRef = ref()
@@ -263,6 +273,7 @@ onMounted(load)
 
 async function load() {
   loading.value = true
+  error.value = false
   try {
     const params = { lifecycle: filters.lifecycle }
     if (filters.keyword.trim()) params.keyword = filters.keyword.trim()
@@ -276,7 +287,9 @@ async function load() {
       courses.value.forEach((c) => { if (c.semester) seen.add(c.semester) })
       semesters.value = [...seen].sort()
     }
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch {
+    error.value = true
+  } finally {
     loading.value = false
   }
 }
@@ -295,6 +308,13 @@ function clearFilters() {
 
 async function archiveCourse(course) {
   try {
+    await ElMessageBox.confirm(
+      `归档后《${course.name}》学生暂不可见，可随时恢复。确认归档？`,
+      '归档课程',
+      { type: 'warning', confirmButtonText: '归档', cancelButtonText: '取消' },
+    )
+  } catch { return }
+  try {
     await teacherApi.archiveCourse(course.id)
     ElMessage.success(`已归档课程《${course.name}》`)
     load()
@@ -302,6 +322,13 @@ async function archiveCourse(course) {
 }
 
 async function restoreCourse(course) {
+  try {
+    await ElMessageBox.confirm(
+      `恢复后《${course.name}》将回到正常课程列表。确认恢复？`,
+      '恢复课程',
+      { type: 'warning', confirmButtonText: '恢复', cancelButtonText: '取消' },
+    )
+  } catch { return }
   try {
     await teacherApi.restoreCourse(course.id)
     ElMessage.success(`已恢复课程《${course.name}》`)
@@ -329,7 +356,8 @@ function goDetail(id) {
 }
 
 async function create() {
-  await formRef.value.validate()
+  const valid = await formRef.value.validate().catch(() => false)
+  if (!valid) return
   creating.value = true
   try {
     await courseApi.create(form)
@@ -515,6 +543,7 @@ async function confirmDuplicate() {
 }
 .onboarding__actions {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--sp-3);
 }
 .onboarding__hint {

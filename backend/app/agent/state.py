@@ -31,6 +31,7 @@ class AgentState(TypedDict):
 
     # === 工具与检索 ===
     tool_calls: List[Dict]         # 待调用工具 [{"name": "...", "args": {...}}]
+    tool_approvals: Optional[List[str]]  # 服务端可信审批:用户已确认的高危工具名
     tool_results: Dict             # 工具返回结果 {"tool_name": result}
     tool_trace: List[Dict]         # 节点内工具循环轨迹 [{"name", "arguments", "result"}]
     rag_context: str               # RAG 检索注入的上下文(带来源标注)
@@ -42,6 +43,7 @@ class AgentState(TypedDict):
     # === 记忆 ===
     profile_snapshot: Dict         # 学情档案快照(进入时读取)
     profile_updates: Dict          # 学情档案更新(退出时回写)
+    profile_write_result: Dict     # 回写结果 {written, skipped_review_plans, reason}
 
     # === 校验与输出 ===
     risk_flag: bool                # 风控标记

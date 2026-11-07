@@ -101,9 +101,16 @@ test('ChatWindow 在 600px 窄屏保持操作可点且无需 hover', () => {
   assert.match(narrowScreenRule, /\.msg__actions\s*\{[^}]*opacity:\s*1;/)
   assert.match(narrowScreenRule, /\.msg__action\s*\{[^}]*min-height:\s*44px;/)
 
-  assert.match(
-    chatWindowSource,
-    /@media \(max-width: 900px\) \{\s*\.chat-side \{ display: none; \}\s*\.chat__scroll \{ padding: var\(--sp-4\); \}\s*\.msg--assistant \.msg__main \{ max-width: 100%; \}\s*\.msg__bubble \{ max-width: 88%; \}\s*\}/,
-    '既有 900px 规则应保持不变',
-  )
+  const drawerStart = chatWindowSource.indexOf('@media (max-width: 900px) {')
+  const drawerEnd = chatWindowSource.indexOf('@media (max-width: 600px)', drawerStart)
+  const drawerRule = chatWindowSource.slice(drawerStart, drawerEnd)
+
+  assert.ok(drawerRule, '应提供 900px 抽屉规则')
+  assert.match(drawerRule, /\.chat-side \{[\s\S]*?position: fixed;/)
+  assert.match(drawerRule, /\.chat-side\.is-open \{\s*transform: translateX\(0\);/)
+  assert.match(drawerRule, /\.chat__mobile-bar \{\s*display: flex;/)
+  assert.match(drawerRule, /\.chat__scroll \{ padding: var\(--sp-4\); \}/)
+  assert.match(drawerRule, /\.msg--assistant \.msg__main \{ max-width: 100%; \}/)
+  assert.match(drawerRule, /\.msg__bubble \{ max-width: 88%; \}/)
+  assert.doesNotMatch(drawerRule, /\.chat-side \{ display: none; \}/)
 })

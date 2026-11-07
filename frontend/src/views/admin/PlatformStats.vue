@@ -1,5 +1,5 @@
 <template>
-  <div class="page" v-loading="loading">
+  <div class="page">
     <div class="page-head">
       <div class="page-head__main">
         <h2 class="page-title">平台统计</h2>
@@ -12,29 +12,34 @@
       </div>
     </div>
 
-    <el-tabs v-model="tab">
+    <div v-if="loading && !hasData">
+      <SkeletonCard :rows="2" />
+      <SkeletonCard :rows="3" />
+    </div>
+    <StateBlock v-else-if="error && !hasData" state="error" title="平台统计加载失败" @retry="loadAll" />
+    <el-tabs v-else v-model="tab">
       <!-- ===== 总览 ===== -->
       <el-tab-pane label="总览" name="overview">
         <div class="tab-body">
           <div class="kpi-grid">
             <div class="kpi">
               <div class="kpi__label">用户总数</div>
-              <div class="kpi__value">{{ overview.users?.total || 0 }}</div>
+              <div class="kpi__value"><CountUp :value="overview.users?.total || 0" /></div>
               <div class="kpi__hint">启用 {{ overview.users?.active || 0 }} · 近 14 天新增 {{ recentUserGrowth }}</div>
             </div>
             <div class="kpi">
               <div class="kpi__label">课程总数</div>
-              <div class="kpi__value">{{ overview.courses?.total || 0 }}</div>
+              <div class="kpi__value"><CountUp :value="overview.courses?.total || 0" /></div>
               <div class="kpi__hint">待审核 {{ overview.courses?.pending || 0 }} 门</div>
             </div>
             <div class="kpi">
               <div class="kpi__label">对话消息</div>
-              <div class="kpi__value kpi__value--accent">{{ overview.interactions?.messages || 0 }}</div>
+              <div class="kpi__value kpi__value--accent"><CountUp :value="overview.interactions?.messages || 0" /></div>
               <div class="kpi__hint">会话数 {{ overview.interactions?.sessions || 0 }}</div>
             </div>
             <div class="kpi">
               <div class="kpi__label">风控命中</div>
-              <div class="kpi__value kpi__value--danger">{{ overview.risk?.total || 0 }}</div>
+              <div class="kpi__value kpi__value--danger"><CountUp :value="overview.risk?.total || 0" /></div>
               <div class="kpi__hint">需人工复核的高风险对话</div>
             </div>
           </div>
@@ -105,22 +110,22 @@
           <div class="kpi-grid">
             <div class="kpi">
               <div class="kpi__label">用户总数</div>
-              <div class="kpi__value">{{ userStats.total || 0 }}</div>
+              <div class="kpi__value"><CountUp :value="userStats.total || 0" /></div>
               <div class="kpi__hint">平台注册账号</div>
             </div>
             <div class="kpi">
               <div class="kpi__label">教师</div>
-              <div class="kpi__value">{{ userStats.roles?.teacher || 0 }}</div>
+              <div class="kpi__value"><CountUp :value="userStats.roles?.teacher || 0" /></div>
               <div class="kpi__hint">占比 {{ percent(userStats.roles?.teacher, userStats.total) }}%</div>
             </div>
             <div class="kpi">
               <div class="kpi__label">学生</div>
-              <div class="kpi__value">{{ userStats.roles?.student || 0 }}</div>
+              <div class="kpi__value"><CountUp :value="userStats.roles?.student || 0" /></div>
               <div class="kpi__hint">占比 {{ percent(userStats.roles?.student, userStats.total) }}%</div>
             </div>
             <div class="kpi">
               <div class="kpi__label">已停用</div>
-              <div class="kpi__value kpi__value--danger">{{ userStats.status?.disabled || 0 }}</div>
+              <div class="kpi__value kpi__value--danger"><CountUp :value="userStats.status?.disabled || 0" /></div>
               <div class="kpi__hint">启用 {{ userStats.status?.active || 0 }} 个</div>
             </div>
           </div>
@@ -175,7 +180,7 @@
               <el-table-column prop="date" label="日期" width="180" />
               <el-table-column prop="count" label="新增用户数" />
               <template #empty>
-                <div class="empty-state">暂无数据</div>
+                <StateBlock state="empty" title="暂无数据" />
               </template>
             </el-table>
           </section>
@@ -188,22 +193,22 @@
           <div class="kpi-grid">
             <div class="kpi">
               <div class="kpi__label">课程总数</div>
-              <div class="kpi__value">{{ courseStats.total_courses || 0 }}</div>
+              <div class="kpi__value"><CountUp :value="courseStats.total_courses || 0" /></div>
               <div class="kpi__hint">已建档课程</div>
             </div>
             <div class="kpi">
               <div class="kpi__label">待审核</div>
-              <div class="kpi__value kpi__value--accent">{{ courseStatusCount('pending') }}</div>
+              <div class="kpi__value kpi__value--accent"><CountUp :value="courseStatusCount('pending')" /></div>
               <div class="kpi__hint">需要处理的课程</div>
             </div>
             <div class="kpi">
               <div class="kpi__label">已通过</div>
-              <div class="kpi__value kpi__value--success">{{ courseStatusCount('approved') }}</div>
+              <div class="kpi__value kpi__value--success"><CountUp :value="courseStatusCount('approved')" /></div>
               <div class="kpi__hint">正常开放</div>
             </div>
             <div class="kpi">
               <div class="kpi__label">覆盖学生</div>
-              <div class="kpi__value">{{ totalStudents }}</div>
+              <div class="kpi__value"><CountUp :value="totalStudents" /></div>
               <div class="kpi__hint">按课程选课人数累计</div>
             </div>
           </div>
@@ -288,7 +293,7 @@
                 </template>
               </el-table-column>
               <template #empty>
-                <div class="empty-state">暂无课程</div>
+                <StateBlock state="empty" title="暂无课程" />
               </template>
             </el-table>
           </section>
@@ -301,17 +306,17 @@
           <div class="kpi-grid">
             <div class="kpi">
               <div class="kpi__label">对话消息总数</div>
-              <div class="kpi__value">{{ agentStats.total_messages || 0 }}</div>
+              <div class="kpi__value"><CountUp :value="agentStats.total_messages || 0" /></div>
               <div class="kpi__hint">全部业务分支累计</div>
             </div>
             <div class="kpi">
               <div class="kpi__label">会话总数</div>
-              <div class="kpi__value">{{ agentStats.total_sessions || 0 }}</div>
+              <div class="kpi__value"><CountUp :value="agentStats.total_sessions || 0" /></div>
               <div class="kpi__hint">平均 {{ avgMessages }} 条 / 会话</div>
             </div>
             <div class="kpi">
               <div class="kpi__label">风控命中</div>
-              <div class="kpi__value kpi__value--danger">{{ agentStats.risk_hits || 0 }}</div>
+              <div class="kpi__value kpi__value--danger"><CountUp :value="agentStats.risk_hits || 0" /></div>
               <div class="kpi__hint">触发安全策略的对话</div>
             </div>
             <div class="kpi">
@@ -391,14 +396,19 @@
 import { computed, onMounted, ref } from 'vue'
 import { adminApi } from '../../api/admin'
 import SvgChart from '../../components/charts/SvgChart.vue'
+import SkeletonCard from '../../components/SkeletonCard.vue'
+import StateBlock from '../../components/StateBlock.vue'
+import CountUp from '../../components/CountUp.vue'
 
 const tab = ref('overview')
 const loading = ref(false)
+const error = ref(false)
 const overview = ref({})
 const userStats = ref({})
 const courseStats = ref({})
 const agentStats = ref({})
 const riskStats = ref({})
+const hasData = computed(() => !!(overview.value?.users?.total || userStats.value?.growth?.length || courseStats.value?.courses?.length))
 
 const ROLE_LABELS = { teacher: '教师', student: '学生', admin: '管理员' }
 const BRANCH_LABELS = {
@@ -410,6 +420,7 @@ const STATUS_LABELS = { pending: '待审核', approved: '已通过', rejected: '
 onMounted(loadAll)
 
 async function loadAll() {
+  error.value = false
   loading.value = true
   const [ov, us, cs, ag, rs] = await Promise.allSettled([
     adminApi.statsOverview(),
@@ -423,6 +434,7 @@ async function loadAll() {
   if (cs.status === 'fulfilled') courseStats.value = cs.value || {}
   if (ag.status === 'fulfilled') agentStats.value = ag.value || {}
   if (rs.status === 'fulfilled') riskStats.value = rs.value || {}
+  if ([ov, us, cs, ag, rs].filter((r) => r.status === 'fulfilled').length === 0) error.value = true
   loading.value = false
 }
 

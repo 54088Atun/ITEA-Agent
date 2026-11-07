@@ -8,6 +8,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.core.config import settings
 from app.core.deps import get_current_user, require_teacher, require_student
 from app.models.user import User
 from app.models.course import Course
@@ -24,6 +25,7 @@ from app.schemas.teacher import ClassStatsOut
 from app.services.class_stats import build_class_stats
 from app.services.class_import import parse_student_rows
 from app.services.course_access import is_open_to_students
+from app.services.uploads import UploadTooLarge, read_upload_limited
 from app.services import class_roles
 from app.services import privacy as privacy_service
 
@@ -562,8 +564,12 @@ async def import_members(
     if classroom.status != "active":
         raise HTTPException(status_code=400, detail="班级已归档，无法导入")
     try:
-        content = await file.read()
+        content = await read_upload_limited(file, settings.CLASS_IMPORT_MAX_BYTES)
         rows = parse_student_rows(content, file.filename or "")
+    except UploadTooLarge as exc:
+        raise HTTPException(
+            status_code=413, detail=f"导入文件超过 {exc.limit_mb}MB 上限",
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -140,7 +140,9 @@ def test_validate_arguments_accepts_valid_arguments():
 def test_validate_arguments_skips_none_values():
     spec = get_tool_spec("rag_search")
 
-    assert validate_tool_arguments(spec, {"scope": None}) is None
+    assert validate_tool_arguments(
+        spec, {"query": "遍历", "course_id": 7, "scope": None},
+    ) is None
 
 
 def test_validate_arguments_rejects_bool_for_integer():
@@ -155,8 +157,21 @@ def test_validate_arguments_allows_extra_keys_when_declared():
     spec = get_tool_spec("rag_search")
 
     assert validate_tool_arguments(
-        spec, {"query": "遍历", "injected": 1}, allowed_extra={"injected"},
+        spec, {"query": "遍历", "course_id": 7, "injected": 1},
+        allowed_extra={"injected"},
     ) is None
+
+
+def test_course_required_tools_reject_missing_course_id():
+    cases = [
+        ("rag_search", {"query": "遍历"}),
+        ("course_evidence", {"query": "遍历"}),
+        ("stats_analyzer", {"metric": "weakness"}),
+    ]
+
+    for name, arguments in cases:
+        message = validate_tool_arguments(get_tool_spec(name), arguments)
+        assert message == f"工具 {name} 缺少必需参数: course_id"
 
 
 # ---------- 超时降级 ----------
@@ -204,6 +219,56 @@ def test_untrusted_tools_marked(monkeypatch):
     assert "course_evidence" in UNTRUSTED_TOOLS
     assert payload["ok"] is True
     assert payload["untrusted"] is True
+
+
+# ---------- 检索路径可用性 ----------
+
+def test_rag_search_reports_unavailable_without_index(monkeypatch, tmp_path):
+    import importlib
+
+    rag_module = importlib.import_module("app.agent.tools.rag_search")
+    manager = rag_module.RAGManager()
+    manager._index_dir = str(tmp_path / "empty")
+    monkeypatch.setattr(rag_module, "_manager", manager)
+    monkeypatch.setattr(rag_module, "agent_course_scope_error", lambda *a, **k: None)
+
+    result = rag_module.rag_search("等价类", 7, user_id=11)
+
+    assert result["fragments"] == []
+    assert result["error"] == "index_unavailable"
+    assert "不可用" in result["context"]
+    assert "来源" not in result["context"]
+
+
+def test_rag_search_reports_failure_without_fake_sources(monkeypatch):
+    import importlib
+
+    rag_module = importlib.import_module("app.agent.tools.rag_search")
+
+    class BrokenManager:
+        def load_index(self, course_id):
+            return True
+
+        def search(self, *args, **kwargs):
+            raise RuntimeError("embedding model missing")
+
+    monkeypatch.setattr(rag_module, "_manager", BrokenManager())
+    monkeypatch.setattr(rag_module, "agent_course_scope_error", lambda *a, **k: None)
+
+    result = rag_module.rag_search("等价类", 7, user_id=11)
+
+    assert result["fragments"] == []
+    assert result["error"] == "retrieval_failed"
+    assert "来源" not in result["context"]
+
+
+def test_course_fact_path_declared_and_rag_marks_unavailable():
+    course_spec = get_tool_spec("course_evidence")
+    rag_spec = get_tool_spec("rag_search")
+
+    assert set(course_spec.roles) == {"teacher", "student", "admin"}
+    assert "course_evidence" in rag_spec.description
+    assert "不可用" in rag_spec.description
 
 
 def test_local_tool_not_marked_untrusted(monkeypatch):

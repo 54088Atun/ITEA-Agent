@@ -277,6 +277,7 @@ async def admin_node(state: AgentState) -> dict:
             state,
             planner=planner,
             tools=tool_schemas_for_role("admin"),
+            approval=state.get("tool_approvals"),
             sink=state.get("stream_queue"),
         )
     except Exception as e:  # noqa: BLE001

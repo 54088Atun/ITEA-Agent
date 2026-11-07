@@ -97,8 +97,82 @@ def _migrate_sqlite_columns():
                 conn.execute(text(
                     "ALTER TABLE chat_messages ADD COLUMN request_id VARCHAR(64) NULL"
                 ))
+            _merge_duplicate_review_plans_sqlite(conn)
     except Exception:  # 迁移失败不阻断启动
         pass
+
+
+def _merge_duplicate_review_plans_sqlite(conn) -> None:
+    """SQLite:归并重复复习计划并建立 (wrong_question_id, next_review_at) 唯一索引
+
+    保留每组最早记录(min id),合并 review_count,存在 pending 则保持 pending,
+    之后才删除重复行,避免未核验数据直接丢失。
+    """
+    from sqlalchemy import text
+
+    indexes = {row[1] for row in conn.execute(text("PRAGMA index_list(review_plans)"))}
+    if "uq_review_plan_slot" in indexes:
+        return
+    conn.execute(text(
+        "UPDATE review_plans SET review_count = ("
+        " SELECT MAX(r2.review_count) FROM review_plans r2"
+        " WHERE r2.wrong_question_id = review_plans.wrong_question_id"
+        " AND r2.next_review_at = review_plans.next_review_at)"
+    ))
+    conn.execute(text(
+        "UPDATE review_plans SET status = 'pending'"
+        " WHERE status != 'pending' AND EXISTS ("
+        " SELECT 1 FROM review_plans r2"
+        " WHERE r2.wrong_question_id = review_plans.wrong_question_id"
+        " AND r2.next_review_at = review_plans.next_review_at"
+        " AND r2.status = 'pending')"
+    ))
+    conn.execute(text(
+        "DELETE FROM review_plans WHERE id NOT IN ("
+        " SELECT MIN(id) FROM review_plans"
+        " GROUP BY wrong_question_id, next_review_at)"
+    ))
+    conn.execute(text(
+        "CREATE UNIQUE INDEX uq_review_plan_slot "
+        "ON review_plans (wrong_question_id, next_review_at)"
+    ))
+
+
+def _merge_duplicate_review_plans_mysql(conn) -> None:
+    """MySQL:归并重复复习计划并建立 (wrong_question_id, next_review_at) 唯一索引
+
+    先合并组内最大 review_count 与 pending 状态,再保留 min(id) 记录,
+    最后删除已合并的重复行;索引已存在时直接跳过。
+    """
+    from sqlalchemy import text
+
+    indexes = {row[2] for row in conn.execute(text("SHOW INDEX FROM review_plans"))}
+    if "uq_review_plan_slot" in indexes:
+        return
+    conn.execute(text(
+        "UPDATE review_plans rp "
+        "JOIN ("
+        " SELECT wrong_question_id, next_review_at, MIN(id) AS keep_id,"
+        " MAX(review_count) AS max_count,"
+        " MAX(status = 'pending') AS has_pending"
+        " FROM review_plans"
+        " GROUP BY wrong_question_id, next_review_at"
+        " HAVING COUNT(*) > 1"
+        ") d ON rp.id = d.keep_id "
+        "SET rp.review_count = d.max_count,"
+        " rp.status = IF(d.has_pending = 1, 'pending', rp.status)"
+    ))
+    conn.execute(text(
+        "DELETE dup FROM review_plans dup "
+        "JOIN review_plans keep "
+        " ON dup.wrong_question_id = keep.wrong_question_id"
+        " AND dup.next_review_at = keep.next_review_at"
+        " AND dup.id > keep.id"
+    ))
+    conn.execute(text(
+        "CREATE UNIQUE INDEX uq_review_plan_slot "
+        "ON review_plans (wrong_question_id, next_review_at)"
+    ))
 
 
 def _seed_legacy_enrollments():
@@ -244,6 +318,7 @@ def _migrate_exam_record_columns():
                     "CREATE UNIQUE INDEX uq_wrong_question_source "
                     "ON wrong_questions (profile_id, source_type, source_id)"
                 ))
+            _merge_duplicate_review_plans_mysql(conn)
             # 新课程默认待审核(仅改默认值,不影响存量课程状态)
             conn.execute(text(
                 "ALTER TABLE courses ALTER COLUMN audit_status SET DEFAULT 'pending'"

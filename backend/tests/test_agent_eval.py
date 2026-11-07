@@ -47,6 +47,48 @@ def test_offline_metrics_do_not_drop_below_baseline():
     assert regressions == [], f"核心指标低于基线: {regressions}"
 
 
+# ---------- 强制确定性安全评测(不依赖外部模型) ----------
+# 本节断言用于 CI 强制门禁;evaluate_live 的模型质量分数仅供人工审阅,
+# 不得替代或抵消这里的安全断言。
+
+def test_security_eval_code_executor_denied_everywhere():
+    from app.agent.tools.gateway import available_tools, tool_schemas
+    from app.services.capabilities import tool_denied_reason
+
+    for role in ("student", "teacher", "admin"):
+        assert tool_denied_reason(role, "code_executor"), f"{role} 不应允许宿主执行"
+        assert "code_executor" not in {tool["name"] for tool in available_tools(role)}
+        assert "code_executor" not in {
+            schema["function"]["name"] for schema in tool_schemas(role)
+        }
+
+
+def test_security_eval_high_risk_tools_require_confirmation():
+    from app.agent.tools.gateway import get_tool_spec
+
+    for name in ("reminder_scheduler", "project.run_tests"):
+        spec = get_tool_spec(name)
+        assert spec is not None
+        assert spec.requires_confirmation is True
+
+
+def test_security_eval_course_required_argument_rejected():
+    from app.agent.tools.gateway import get_tool_spec, validate_tool_arguments
+
+    spec = get_tool_spec("course_evidence")
+    assert validate_tool_arguments(spec, {"query": "等价类划分"})
+    assert validate_tool_arguments(
+        spec, {"query": "等价类划分", "course_id": 7},
+    ) is None
+
+
+def test_security_eval_empty_tool_calls_bypass_executor():
+    from app.agent.graph import route_after_business
+
+    assert route_after_business({"tool_calls": []}) == "plan_patch"
+    assert route_after_business({"tool_calls": [{"name": "rag_search"}]}) == "tool_executor"
+
+
 def test_live_mode_requires_api_key(monkeypatch):
     from app.core.config import settings
 

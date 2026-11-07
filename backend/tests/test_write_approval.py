@@ -141,3 +141,29 @@ def test_audit_logs_scoped_to_owner_and_admin(db):
     )
     assert everything["total"] == 1
     assert everything["items"][0]["user_name"] == "张老师"
+
+
+def test_agent_high_risk_tool_confirmation_is_not_write_approval(db, monkeypatch):
+    """Agent 工具确认是独立可信上下文,不得复用/伪造 HTTP 写操作审批"""
+    from app.agent.nodes import tool_executor
+
+    executed = []
+    monkeypatch.setitem(
+        tool_executor.TOOL_REGISTRY, "reminder_scheduler",
+        lambda **kw: executed.append(kw) or {"scheduled": True},
+    )
+
+    blocked = tool_executor._execute_single(
+        {
+            "name": "reminder_scheduler",
+            "arguments": {"task_type": "review", "confirmed": True},
+        },
+        {
+            "user_role": "student", "user_id": 2,
+            "course_id": None, "session_id": "s1",
+        },
+    )
+
+    assert executed == []
+    assert blocked["requires_confirmation"] is True
+    assert db.query(WriteAuditLog).count() == 0

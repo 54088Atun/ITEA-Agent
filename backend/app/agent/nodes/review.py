@@ -21,6 +21,31 @@ logger = logging.getLogger(__name__)
 
 FORGETTING_INTERVALS = [1, 2, 4, 7, 15, 30]
 
+# 无历史掌握度记录时的默认基线
+DEFAULT_MASTERY = 0.5
+
+
+def _mastery_baseline(profile: dict, kp_name: str) -> float:
+    """从学情快照读取知识点基线掌握度,仅无历史记录时使用 0.5"""
+    target = str(kp_name or "").strip().lower()
+    if not target:
+        return DEFAULT_MASTERY
+    fallback = None
+    for item in (profile or {}).get("mastery") or []:
+        point = str(item.get("point") or "").strip().lower()
+        if not point:
+            continue
+        try:
+            level = float(item.get("level"))
+        except (TypeError, ValueError):
+            continue
+        level = max(0.0, min(1.0, level))
+        if point == target:
+            return level
+        if fallback is None and (target in point or point in target):
+            fallback = level
+    return DEFAULT_MASTERY if fallback is None else fallback
+
 
 async def review_node(state: AgentState) -> dict:
     """错题复盘节点:运行时直接读取学情与课程资料"""
@@ -105,8 +130,11 @@ async def review_node(state: AgentState) -> dict:
 
     # 4.2 掌握度更新
     if mastery_update:
-        delta = mastery_update.get("delta", -20)
-        current = 0.5  # MVP:默认当前掌握度,生产应从快照读取
+        try:
+            delta = float(mastery_update.get("delta", -20))
+        except (TypeError, ValueError):
+            delta = -20.0
+        current = _mastery_baseline(profile, error_analysis.get("kp_name", ""))
         new_level = max(0.0, min(1.0, current + delta / 100))
         profile_updates["mastery_updates"] = [{
             "knowledge_point": error_analysis.get("kp_name", ""),

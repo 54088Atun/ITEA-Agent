@@ -49,7 +49,9 @@
     </div>
 
     <div class="panel">
-      <el-table :data="items" v-loading="loading">
+      <SkeletonTable v-if="loading && !items.length" :rows="6" :cols="5" />
+      <StateBlock v-else-if="error" state="error" @retry="load" />
+      <el-table v-else :data="items">
         <el-table-column prop="id" label="ID" width="70" />
         <el-table-column label="用户" width="180">
           <template #default="{ row }">
@@ -71,7 +73,11 @@
           <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
         </el-table-column>
         <template #empty>
-          <div class="empty-state">暂无风控命中记录</div>
+          <StateBlock
+            state="empty"
+            title="暂无风控命中记录"
+            hint="调整筛选条件后重试"
+          />
         </template>
       </el-table>
 
@@ -93,8 +99,11 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { adminApi } from '../../api/admin'
+import SkeletonTable from '../../components/SkeletonTable.vue'
+import StateBlock from '../../components/StateBlock.vue'
 
 const loading = ref(false)
+const error = ref(false)
 const items = ref([])
 const total = ref(0)
 const page = ref(1)
@@ -118,6 +127,7 @@ async function loadStats() {
 
 async function load() {
   loading.value = true
+  error.value = false
   try {
     const data = await adminApi.riskLogs({
       page: page.value,
@@ -127,7 +137,9 @@ async function load() {
     })
     items.value = data.items || []
     total.value = data.total || 0
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch {
+    error.value = true
+  } finally {
     loading.value = false
   }
 }

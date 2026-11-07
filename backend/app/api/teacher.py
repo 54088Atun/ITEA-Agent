@@ -41,6 +41,7 @@ from app.api.chat import stream_agent_response, SSE_HEADERS
 from app.services.material_parser import (
     extract_text_async, safe_filename, validate_filename,
 )
+from app.services.uploads import UploadTooLarge, save_upload_limited
 from app.services.course_copy import copy_course_structure
 from app.services.kp_generator import generate_draft, dumps
 from app.services.content_moderation import (
@@ -166,8 +167,12 @@ def save_material(db: Session, course_id: int, material_type: str, title: str,
     save_dir = settings.upload_path / str(course_id)
     save_dir.mkdir(parents=True, exist_ok=True)
     file_path = save_dir / filename
-    with file_path.open("wb") as f:
-        shutil.copyfileobj(file.file, f)
+    try:
+        save_upload_limited(file, file_path, settings.MATERIAL_MAX_BYTES)
+    except UploadTooLarge as exc:
+        raise HTTPException(
+            status_code=413, detail=f"文件超过 {exc.limit_mb}MB 上限",
+        ) from exc
 
     material = CourseMaterial(
         course_id=course_id, type=material_type, title=title,

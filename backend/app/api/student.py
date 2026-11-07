@@ -9,6 +9,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.core.time import utcnow
 from app.core.deps import require_student
 from app.models.user import User
 from app.models.course import Course, KnowledgePoint
@@ -155,7 +156,7 @@ def _pending_exams(db: Session, student: User, course_id: int) -> list[Exam]:
 
 def _course_snapshot(db: Session, student: User, profile: StudentProfile) -> dict:
     """单个课程的学习快照:薄弱点、到期复习、待交作业、待考考试"""
-    now = datetime.utcnow()
+    now = utcnow()
     course = db.query(Course).filter(Course.id == profile.course_id).first()
 
     weak_rows = (
@@ -295,7 +296,7 @@ def learning_recommendations(
     """下一步建议:按截止时间与薄弱程度给出可执行动作,不调用模型"""
     if course_id is not None:
         _ensure_profile(db, student.id, course_id)
-    now = datetime.utcnow()
+    now = utcnow()
     items: list[dict] = []
 
     for snapshot in _learning_snapshots(db, student, course_id):
@@ -553,18 +554,25 @@ def complete_review(
     db: Session = Depends(get_db),
 ):
     """标记复习完成(进入下一个遗忘曲线间隔)"""
-    plan = db.query(ReviewPlan).filter(ReviewPlan.id == plan_id).first()
+    plan = (
+        db.query(ReviewPlan)
+        .join(WrongQuestion, ReviewPlan.wrong_question_id == WrongQuestion.id)
+        .join(StudentProfile, WrongQuestion.profile_id == StudentProfile.id)
+        .filter(ReviewPlan.id == plan_id, StudentProfile.user_id == student.id)
+        .first()
+    )
     if not plan:
         raise HTTPException(status_code=404, detail="复习计划不存在")
+    if plan.status == "done" or plan.next_review_at > utcnow():
+        return {"id": plan.id, "status": plan.status, "next_review_at": str(plan.next_review_at)}
 
     intervals = [1, 2, 4, 7, 15, 30]
     plan.review_count += 1
     if plan.review_count >= len(intervals):
         plan.status = "done"
     else:
-        from datetime import datetime, timedelta
         plan.interval_days = intervals[plan.review_count]
-        plan.next_review_at = datetime.now() + timedelta(days=intervals[plan.review_count])
+        plan.next_review_at = utcnow() + timedelta(days=intervals[plan.review_count])
     db.commit()
     return {"id": plan.id, "status": plan.status, "next_review_at": str(plan.next_review_at)}
 
@@ -639,7 +647,7 @@ def _visible_interview_assignment(
         raise HTTPException(status_code=404, detail="面试作业不存在")
     if (
         assignment.status != "active"
-        or (assignment.due_at and assignment.due_at < datetime.utcnow())
+        or (assignment.due_at and assignment.due_at < utcnow())
     ):
         raise HTTPException(status_code=403, detail="面试作业已关闭或已截止")
 
@@ -847,7 +855,7 @@ def create_wrong_question(
     db.flush()
     db.add(ReviewPlan(
         wrong_question_id=wq.id,
-        next_review_at=datetime.utcnow() + timedelta(days=1),
+        next_review_at=utcnow() + timedelta(days=1),
         review_count=0,
         interval_days=1,
         status="pending",
@@ -896,7 +904,7 @@ def list_my_interview_assignments(
             InterviewAssignment.status == "active",
             or_(*conditions),
             or_(InterviewAssignment.due_at.is_(None),
-                InterviewAssignment.due_at >= datetime.utcnow()),
+                InterviewAssignment.due_at >= utcnow()),
         )
         .order_by(InterviewAssignment.id.desc())
         .limit(20)

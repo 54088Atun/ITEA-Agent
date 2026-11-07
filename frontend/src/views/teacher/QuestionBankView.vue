@@ -15,6 +15,9 @@
         <el-button :disabled="!courseId" @click="openPlan">
           <el-icon><TrendCharts /></el-icon> AI 科目建议
         </el-button>
+        <el-button :disabled="!courseId" @click="openImport">
+          <el-icon><Upload /></el-icon> 批量导入
+        </el-button>
         <el-button :disabled="!courseId" @click="openQuestion">
           <el-icon><Plus /></el-icon> 新增题目
         </el-button>
@@ -33,7 +36,9 @@
     <el-tabs v-model="tab">
       <el-tab-pane label="题库" name="questions">
         <div class="panel">
-          <el-table :data="questions" v-loading="loadingQuestions">
+          <SkeletonTable v-if="loadingQuestions && !questions.length" :rows="6" :cols="4" />
+          <StateBlock v-else-if="errorQuestions && !questions.length" state="error" title="题目列表加载失败" @retry="loadQuestions" />
+          <el-table v-else :data="questions" v-loading="loadingQuestions">
             <el-table-column prop="id" label="ID" width="70" />
             <el-table-column label="题型" width="90">
               <template #default="{ row }">
@@ -59,7 +64,55 @@
               </template>
             </el-table-column>
             <template #empty>
-              <div class="empty-state">该课程还没有题目，可手动新增或让 AI 出题</div>
+              <StateBlock state="empty" title="该课程还没有题目，可手动新增或让 AI 出题" />
+            </template>
+          </el-table>
+        </div>
+      </el-tab-pane>
+
+      <el-tab-pane label="出题草稿" name="drafts">
+        <div class="panel">
+          <SkeletonTable v-if="loadingDrafts && !drafts.length" :rows="4" :cols="4" />
+          <StateBlock
+            v-else-if="errorDrafts"
+            state="error"
+            title="出题草稿加载失败"
+            @retry="loadDrafts"
+          />
+          <el-table v-else :data="drafts">
+            <el-table-column prop="id" label="ID" width="70" />
+            <el-table-column label="题目数" width="100">
+              <template #default="{ row }">{{ row.items?.length || 0 }} 道</template>
+            </el-table-column>
+            <el-table-column label="状态" width="110">
+              <template #default="{ row }">
+                <el-tag :type="draftStatusTag(row.status)" size="small" effect="light">
+                  {{ draftStatusLabel(row.status) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="生成时间" min-width="170">
+              <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+            </el-table-column>
+            <el-table-column label="操作" width="230" fixed="right">
+              <template #default="{ row }">
+                <el-button link type="primary" @click="openDraftPreview(row)">查看</el-button>
+                <el-button
+                  v-if="row.status === 'draft'"
+                  link type="success" @click="adoptDraftRow(row)"
+                >采纳全部</el-button>
+                <el-button
+                  v-if="row.status !== 'discarded'"
+                  link type="danger" @click="discardDraftRow(row)"
+                >丢弃</el-button>
+              </template>
+            </el-table-column>
+            <template #empty>
+              <StateBlock
+                state="empty"
+                title="还没有出题草稿"
+                hint="使用「AI 出题」或「批量导入」后会在这里保留记录"
+              />
             </template>
           </el-table>
         </div>
@@ -67,7 +120,9 @@
 
       <el-tab-pane label="试卷" name="exams">
         <div class="panel">
-          <el-table :data="exams" v-loading="loadingExams">
+          <SkeletonTable v-if="loadingExams && !exams.length" :rows="6" :cols="4" />
+          <StateBlock v-else-if="errorExams && !exams.length" state="error" title="试卷列表加载失败" @retry="loadExams" />
+          <el-table v-else :data="exams" v-loading="loadingExams">
             <el-table-column prop="id" label="ID" width="70" />
             <el-table-column prop="title" label="试卷" min-width="200" />
             <el-table-column label="课程" width="150">
@@ -94,7 +149,7 @@
               </template>
             </el-table-column>
             <template #empty>
-              <div class="empty-state">还没有试卷，点击右上角「新建试卷」组卷</div>
+              <StateBlock state="empty" title="还没有试卷，点击右上角「新建试卷」组卷" />
             </template>
           </el-table>
         </div>
@@ -107,7 +162,9 @@
             title="AI 按课程知识点推荐考试科目与考核项（题型/题量/分值/难度）；采纳后成为本课程考试配置，不自动组卷或发布。"
             class="tip"
           />
-          <el-table :data="plans" v-loading="loadingPlans">
+          <SkeletonTable v-if="loadingPlans && !plans.length" :rows="6" :cols="4" />
+          <StateBlock v-else-if="errorPlans && !plans.length" state="error" title="考试建议加载失败" @retry="loadPlans" />
+          <el-table v-else :data="plans" v-loading="loadingPlans">
             <el-table-column prop="id" label="ID" width="70" />
             <el-table-column label="建议方案" min-width="200">
               <template #default="{ row }">{{ row.plan.title }}</template>
@@ -139,7 +196,7 @@
               </template>
             </el-table-column>
             <template #empty>
-              <div class="empty-state">还没有考试建议，点击右上角「AI 科目建议」生成</div>
+              <StateBlock state="empty" title="还没有考试建议，点击右上角「AI 科目建议」生成" />
             </template>
           </el-table>
         </div>
@@ -151,10 +208,10 @@
       <el-form label-width="90px">
         <el-form-item label="题型">
           <el-radio-group v-model="qForm.type" @change="onTypeChange">
-            <el-radio-button label="single">单选</el-radio-button>
-            <el-radio-button label="multiple">多选</el-radio-button>
-            <el-radio-button label="judge">判断</el-radio-button>
-            <el-radio-button label="short">简答</el-radio-button>
+            <el-radio-button value="single">单选</el-radio-button>
+            <el-radio-button value="multiple">多选</el-radio-button>
+            <el-radio-button value="judge">判断</el-radio-button>
+            <el-radio-button value="short">简答</el-radio-button>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="题干">
@@ -176,8 +233,8 @@
         </template>
         <el-form-item v-else-if="qForm.type === 'judge'" label="答案">
           <el-radio-group v-model="qForm.answer">
-            <el-radio label="true">正确</el-radio>
-            <el-radio label="false">错误</el-radio>
+            <el-radio value="true">正确</el-radio>
+            <el-radio value="false">错误</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item v-else label="参考答案">
@@ -196,6 +253,37 @@
       </template>
     </el-dialog>
 
+    <!-- 批量导入 -->
+    <el-dialog v-model="importVisible" title="批量导入题目" width="640px">
+      <el-alert
+        type="info" :closable="false" show-icon
+        title="粘贴 JSON 数组或选择 .json 文件；每题需包含 type、stem、answer，options 仅选择题需要。"
+      />
+      <div class="import-toolbar">
+        <el-button size="small" @click="pickImportFile">
+          <el-icon><FolderOpened /></el-icon> 选择 JSON 文件
+        </el-button>
+        <input
+          ref="importFile"
+          type="file"
+          accept=".json,application/json"
+          hidden
+          @change="onImportFile"
+        />
+        <span class="hint">格式示例：type 取 single / multiple / judge / short</span>
+      </div>
+      <el-input
+        v-model="importText"
+        type="textarea"
+        :rows="10"
+        placeholder='[{"type":"single","stem":"题干","options":[{"key":"A","text":"选项"}],"answer":"A","analysis":"解析","difficulty":3}]'
+      />
+      <template #footer>
+        <el-button @click="importVisible = false">取消</el-button>
+        <el-button type="primary" :loading="importing" @click="submitImport">开始导入</el-button>
+      </template>
+    </el-dialog>
+
     <!-- AI 出题 -->
     <el-dialog v-model="aiVisible" title="AI 出题" width="520px">
       <el-form label-width="90px">
@@ -204,9 +292,9 @@
         </el-form-item>
         <el-form-item label="题型">
           <el-checkbox-group v-model="aiForm.types">
-            <el-checkbox label="single">单选</el-checkbox>
-            <el-checkbox label="multiple">多选</el-checkbox>
-            <el-checkbox label="judge">判断</el-checkbox>
+            <el-checkbox value="single">单选</el-checkbox>
+            <el-checkbox value="multiple">多选</el-checkbox>
+            <el-checkbox value="judge">判断</el-checkbox>
           </el-checkbox-group>
         </el-form-item>
       </el-form>
@@ -223,7 +311,7 @@
         <p class="hint">勾选要采纳的题目；未采纳的不会进入题库。</p>
         <el-checkbox-group v-model="selectedDraft">
           <div v-for="(item, idx) in draft.items" :key="idx" class="draft-item">
-            <el-checkbox :label="idx">
+            <el-checkbox :value="idx">
               <span class="draft-item__stem">{{ item.stem }}</span>
             </el-checkbox>
             <div class="draft-item__meta">
@@ -474,11 +562,13 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { examApi } from '../../api/exams'
 import { teacherApi } from '../../api/teacher'
 import { classroomApi } from '../../api/classroom'
+import SkeletonTable from '../../components/SkeletonTable.vue'
+import StateBlock from '../../components/StateBlock.vue'
 
 const courses = ref([])
 const classes = ref([])
@@ -489,6 +579,19 @@ const questions = ref([])
 const exams = ref([])
 const loadingQuestions = ref(false)
 const loadingExams = ref(false)
+const errorQuestions = ref(false)
+const errorExams = ref(false)
+
+// 出题草稿
+const drafts = ref([])
+const loadingDrafts = ref(false)
+const errorDrafts = ref(false)
+
+// 批量导入
+const importVisible = ref(false)
+const importText = ref('')
+const importing = ref(false)
+const importFile = ref(null)
 
 const questionVisible = ref(false)
 const savingQuestion = ref(false)
@@ -506,6 +609,7 @@ const adopting = ref(false)
 
 const plans = ref([])
 const loadingPlans = ref(false)
+const errorPlans = ref(false)
 const planVisible = ref(false)
 const generatingPlan = ref(false)
 const planForm = reactive({ duration_minutes: 90, total_score: 100 })
@@ -552,7 +656,12 @@ onMounted(async () => {
 function onCourseChange() {
   loadQuestions()
   loadPlans()
+  if (tab.value === 'drafts') loadDrafts()
 }
+
+watch(tab, (v) => {
+  if (v === 'drafts' && courseId.value) loadDrafts()
+})
 
 function courseName(id) {
   return courses.value.find((c) => c.id === id)?.name || '—'
@@ -589,21 +698,23 @@ function formatTime(t) {
 
 async function loadQuestions() {
   if (!courseId.value) return
+  errorQuestions.value = false
   loadingQuestions.value = true
   try {
     const rows = await examApi.questions(courseId.value, { limit: 300 })
     questions.value = Array.isArray(rows) ? rows : []
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch { errorQuestions.value = true } finally {
     loadingQuestions.value = false
   }
 }
 
 async function loadExams() {
+  errorExams.value = false
   loadingExams.value = true
   try {
     const rows = await examApi.exams()
     exams.value = Array.isArray(rows) ? rows : []
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch { errorExams.value = true } finally {
     loadingExams.value = false
   }
 }
@@ -613,11 +724,12 @@ async function loadPlans() {
     plans.value = []
     return
   }
+  errorPlans.value = false
   loadingPlans.value = true
   try {
     const rows = await examApi.examPlanDrafts(courseId.value)
     plans.value = Array.isArray(rows) ? rows : []
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch { errorPlans.value = true } finally {
     loadingPlans.value = false
   }
 }
@@ -733,6 +845,7 @@ async function adoptDraft(payload) {
     ElMessage.success(`已采纳 ${res.created} 道题目`)
     draftVisible.value = false
     loadQuestions()
+    loadDrafts()
   } catch { /* 拦截器已提示 */ } finally {
     adopting.value = false
   }
@@ -743,7 +856,137 @@ async function discardDraft() {
     await examApi.discardDraft(draft.value.id)
     draftVisible.value = false
     ElMessage.success('草稿已丢弃')
+    loadDrafts()
   } catch { /* 拦截器已提示 */ }
+}
+
+// ---------- 出题草稿列表 ----------
+
+function draftStatusLabel(s) {
+  return { draft: '待采纳', adopted: '已采纳', discarded: '已丢弃' }[s] || s
+}
+
+function draftStatusTag(s) {
+  return { draft: 'info', adopted: 'success', discarded: 'warning' }[s] || 'info'
+}
+
+async function loadDrafts() {
+  if (!courseId.value) {
+    drafts.value = []
+    return
+  }
+  errorDrafts.value = false
+  loadingDrafts.value = true
+  try {
+    const rows = await examApi.questionDrafts(courseId.value)
+    drafts.value = Array.isArray(rows) ? rows : []
+  } catch { errorDrafts.value = true } finally {
+    loadingDrafts.value = false
+  }
+}
+
+function openDraftPreview(row) {
+  draft.value = row
+  selectedDraft.value = []
+  draftVisible.value = true
+}
+
+async function adoptDraftRow(row) {
+  try {
+    await ElMessageBox.confirm(`采纳后将把 ${row.items?.length || 0} 道题目写入题库，确定？`, '采纳草稿', { type: 'warning' })
+  } catch { return }
+  try {
+    const res = await examApi.adoptDraft(row.id, { adopt_all: true })
+    ElMessage.success(`已采纳 ${res.created} 道题目`)
+    loadDrafts()
+    loadQuestions()
+  } catch { /* 拦截器已提示 */ }
+}
+
+async function discardDraftRow(row) {
+  try {
+    await ElMessageBox.confirm('丢弃后该草稿不再可用，确定丢弃？', '丢弃草稿', { type: 'warning' })
+  } catch { return }
+  try {
+    await examApi.discardDraft(row.id)
+    ElMessage.success('草稿已丢弃')
+    loadDrafts()
+  } catch { /* 拦截器已提示 */ }
+}
+
+// ---------- 批量导入 ----------
+
+function openImport() {
+  importText.value = ''
+  importVisible.value = true
+}
+
+function pickImportFile() {
+  importFile.value?.click()
+}
+
+async function onImportFile(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file) return
+  try {
+    // 兼容 Windows 记事本保存的 BOM 头
+    importText.value = (await file.text()).replace(/^\uFEFF/, '')
+  } catch {
+    ElMessage.warning('文件读取失败，请重试')
+  }
+}
+
+async function submitImport() {
+  let list
+  try {
+    list = JSON.parse(importText.value)
+  } catch {
+    return ElMessage.warning('JSON 解析失败，请检查格式')
+  }
+  if (!Array.isArray(list) || !list.length) {
+    return ElMessage.warning('请提供非空的 JSON 数组')
+  }
+  const types = ['single', 'multiple', 'judge', 'short']
+  const payloads = []
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i]
+    if (!item || typeof item !== 'object') {
+      return ElMessage.warning(`第 ${i + 1} 项格式不正确`)
+    }
+    if (!String(item.stem || '').trim() || !String(item.answer || '').trim()) {
+      return ElMessage.warning(`第 ${i + 1} 项缺少题干或答案`)
+    }
+    payloads.push({
+      course_id: courseId.value,
+      type: types.includes(item.type) ? item.type : 'single',
+      stem: String(item.stem).trim(),
+      options: Array.isArray(item.options)
+        ? item.options
+          .filter((op) => op && String(op.text || '').trim())
+          .map((op) => ({ key: op.key || '', text: String(op.text).trim() }))
+        : [],
+      answer: String(item.answer).trim(),
+      analysis: item.analysis ? String(item.analysis) : null,
+      difficulty: Number(item.difficulty) || 3,
+    })
+  }
+  importing.value = true
+  let ok = 0
+  for (const payload of payloads) {
+    try {
+      await examApi.createQuestion(payload)
+      ok++
+    } catch { /* 单条失败不中断 */ }
+  }
+  importing.value = false
+  if (ok === payloads.length) {
+    ElMessage.success(`已导入 ${ok} 道题目`)
+  } else {
+    ElMessage.warning(`导入成功 ${ok} 道，失败 ${payloads.length - ok} 道`)
+  }
+  importVisible.value = false
+  loadQuestions()
 }
 
 // ---------- 考试科目/考核项建议 ----------
@@ -962,6 +1205,13 @@ async function confirmGrade() {
 .unit { margin-left: var(--sp-2); font-size: var(--fs-xs); color: var(--text-secondary); }
 .ml { margin-left: var(--sp-3); }
 .hint { font-size: var(--fs-xs); color: var(--text-secondary); }
+.import-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  margin: var(--sp-3) 0;
+}
 .dim { color: var(--text-placeholder); }
 .drafts { max-height: 420px; overflow: auto; }
 .draft-item { padding: var(--sp-2) 0; border-bottom: 1px dashed var(--border); }

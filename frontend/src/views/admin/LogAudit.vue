@@ -12,7 +12,7 @@
       <el-tab-pane label="对话日志" name="interaction">
         <div class="tab-body">
           <div class="filter-bar">
-            <el-input v-model="iFilters.user_id" placeholder="用户 ID" clearable style="width: 140px" />
+            <DebouncedInput v-model="iFilters.user_id" placeholder="用户 ID" clearable style="width: 140px" @keyup.enter="reloadInteraction" @debounce="reloadInteraction" />
             <el-select v-model="iFilters.branch" placeholder="全部分支" clearable style="width: 160px">
               <el-option label="备课 teacher" value="teacher" />
               <el-option label="助教 tutor" value="tutor" />
@@ -20,14 +20,21 @@
               <el-option label="面试 interview" value="interview" />
               <el-option label="风控 block" value="block" />
             </el-select>
-            <el-input v-model="iFilters.session_id" placeholder="会话 ID" clearable style="width: 220px" />
+            <DebouncedInput v-model="iFilters.session_id" placeholder="会话 ID" clearable style="width: 220px" @keyup.enter="reloadInteraction" @debounce="reloadInteraction" />
             <el-button type="primary" @click="reloadInteraction"><el-icon><Search /></el-icon> 查询</el-button>
             <div class="filter-bar__spacer"></div>
             <span class="filter-bar__count">共 {{ iTotal }} 条对话</span>
           </div>
 
           <div class="panel">
-            <el-table :data="interactions" v-loading="iLoading">
+            <SkeletonTable v-if="iLoading && !interactions.length" :rows="6" :cols="5" />
+            <StateBlock
+              v-else-if="iError"
+              state="error"
+              title="对话日志加载失败"
+              @retry="loadInteraction"
+            />
+            <el-table v-else :data="interactions">
               <el-table-column prop="id" label="ID" width="70" />
               <el-table-column label="用户" width="150">
                 <template #default="{ row }">
@@ -47,20 +54,17 @@
                 <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
               </el-table-column>
               <template #empty>
-                <div class="empty-state">暂无对话日志</div>
+                <StateBlock state="empty" title="暂无对话日志" hint="调整用户或类型筛选后重试" />
               </template>
             </el-table>
 
-            <div class="pager">
-              <el-pagination
-                v-model:current-page="iPage"
-                v-model:page-size="iSize"
-                :total="iTotal"
-                :page-sizes="[10, 20, 50]"
-                layout="total, sizes, prev, pager, next"
-                @current-change="loadInteraction"
-                @size-change="reloadInteraction"
-              />
+            <div ref="iSentinel" class="load-more">
+              <el-button
+                v-if="interactions.length < iTotal"
+                text type="primary" :loading="iLoading"
+                @click="loadMoreInteraction"
+              >加载更多（已加载 {{ interactions.length }} / {{ iTotal }}）</el-button>
+              <span v-else-if="interactions.length" class="load-more__done">已加载全部 {{ iTotal }} 条</span>
             </div>
           </div>
         </div>
@@ -70,7 +74,7 @@
       <el-tab-pane label="操作日志" name="operation">
         <div class="tab-body">
           <div class="filter-bar">
-            <el-input v-model="oFilters.admin_id" placeholder="管理员 ID" clearable style="width: 150px" />
+            <DebouncedInput v-model="oFilters.admin_id" placeholder="管理员 ID" clearable style="width: 150px" @keyup.enter="reloadOperation" @debounce="reloadOperation" />
             <el-select v-model="oFilters.action" placeholder="全部动作" clearable style="width: 160px">
               <el-option v-for="a in actions" :key="a" :label="a" :value="a" />
             </el-select>
@@ -83,7 +87,14 @@
           </div>
 
           <div class="panel">
-            <el-table :data="operations" v-loading="oLoading">
+            <SkeletonTable v-if="oLoading && !operations.length" :rows="6" :cols="5" />
+            <StateBlock
+              v-else-if="oError"
+              state="error"
+              title="操作日志加载失败"
+              @retry="loadOperation"
+            />
+            <el-table v-else :data="operations">
               <el-table-column prop="id" label="ID" width="70" />
               <el-table-column label="操作人" width="150">
                 <template #default="{ row }">
@@ -99,20 +110,17 @@
                 <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
               </el-table-column>
               <template #empty>
-                <div class="empty-state">暂无操作日志</div>
+                <StateBlock state="empty" title="暂无操作日志" hint="调整筛选条件后重试" />
               </template>
             </el-table>
 
-            <div class="pager">
-              <el-pagination
-                v-model:current-page="oPage"
-                v-model:page-size="oSize"
-                :total="oTotal"
-                :page-sizes="[10, 20, 50]"
-                layout="total, sizes, prev, pager, next"
-                @current-change="loadOperation"
-                @size-change="reloadOperation"
-              />
+            <div ref="oSentinel" class="load-more">
+              <el-button
+                v-if="operations.length < oTotal"
+                text type="primary" :loading="oLoading"
+                @click="loadMoreOperation"
+              >加载更多（已加载 {{ operations.length }} / {{ oTotal }}）</el-button>
+              <span v-else-if="operations.length" class="load-more__done">已加载全部 {{ oTotal }} 条</span>
             </div>
           </div>
         </div>
@@ -135,7 +143,14 @@
           </div>
 
           <div class="panel">
-            <el-table :data="audits" v-loading="aLoading">
+            <SkeletonTable v-if="aLoading && !audits.length" :rows="6" :cols="5" />
+            <StateBlock
+              v-else-if="aError"
+              state="error"
+              title="写操作审计加载失败"
+              @retry="loadAudit"
+            />
+            <el-table v-else :data="audits">
               <el-table-column prop="id" label="ID" width="70" />
               <el-table-column label="操作人" width="160">
                 <template #default="{ row }">
@@ -171,20 +186,17 @@
                 <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
               </el-table-column>
               <template #empty>
-                <div class="empty-state">暂无写操作审计</div>
+                <StateBlock state="empty" title="暂无写操作审计" hint="调整筛选条件后重试" />
               </template>
             </el-table>
 
-            <div class="pager">
-              <el-pagination
-                v-model:current-page="aPage"
-                v-model:page-size="aSize"
-                :total="aTotal"
-                :page-sizes="[10, 20, 50]"
-                layout="total, sizes, prev, pager, next"
-                @current-change="loadAudit"
-                @size-change="reloadAudit"
-              />
+            <div ref="aSentinel" class="load-more">
+              <el-button
+                v-if="audits.length < aTotal"
+                text type="primary" :loading="aLoading"
+                @click="loadMoreAudit"
+              >加载更多（已加载 {{ audits.length }} / {{ aTotal }}）</el-button>
+              <span v-else-if="audits.length" class="load-more__done">已加载全部 {{ aTotal }} 条</span>
             </div>
           </div>
         </div>
@@ -197,11 +209,19 @@
 import { ref, reactive, onMounted, watch } from 'vue'
 import { adminApi } from '../../api/admin'
 import { approvalsApi } from '../../api/approvals'
+import SkeletonTable from '../../components/SkeletonTable.vue'
+import StateBlock from '../../components/StateBlock.vue'
+import DebouncedInput from '../../components/DebouncedInput.vue'
+import { useAutoLoadMore } from '../../composables/useAutoLoadMore.js'
 
 const tab = ref('interaction')
+const iSentinel = ref(null)
+const oSentinel = ref(null)
+const aSentinel = ref(null)
 
 // 对话日志
 const iLoading = ref(false)
+const iError = ref(false)
 const interactions = ref([])
 const iTotal = ref(0)
 const iPage = ref(1)
@@ -210,6 +230,7 @@ const iFilters = reactive({ user_id: '', branch: '', session_id: '' })
 
 // 操作日志
 const oLoading = ref(false)
+const oError = ref(false)
 const operations = ref([])
 const oTotal = ref(0)
 const oPage = ref(1)
@@ -218,6 +239,7 @@ const oFilters = reactive({ admin_id: '', action: '', target_type: '' })
 
 // 写操作审计
 const aLoading = ref(false)
+const aError = ref(false)
 const audits = ref([])
 const aTotal = ref(0)
 const aPage = ref(1)
@@ -230,7 +252,11 @@ const targetTypes = ['user', 'course', 'material', 'config']
 
 onMounted(loadInteraction)
 
-async function loadInteraction() {
+async function loadInteraction(reset = true) {
+  if (reset) {
+    iPage.value = 1
+    iError.value = false
+  }
   iLoading.value = true
   try {
     const data = await adminApi.interactionLogs({
@@ -240,11 +266,18 @@ async function loadInteraction() {
       branch: iFilters.branch || undefined,
       session_id: iFilters.session_id || undefined,
     })
-    interactions.value = data.items || []
+    const rows = data.items || []
+    interactions.value = reset ? rows : [...interactions.value, ...rows]
     iTotal.value = data.total || 0
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch { iError.value = true } finally {
     iLoading.value = false
   }
+}
+
+function loadMoreInteraction() {
+  if (iLoading.value || interactions.value.length >= iTotal.value) return
+  iPage.value += 1
+  loadInteraction(false)
 }
 
 function reloadInteraction() {
@@ -252,7 +285,11 @@ function reloadInteraction() {
   loadInteraction()
 }
 
-async function loadOperation() {
+async function loadOperation(reset = true) {
+  if (reset) {
+    oPage.value = 1
+    oError.value = false
+  }
   oLoading.value = true
   try {
     const data = await adminApi.operationLogs({
@@ -262,11 +299,18 @@ async function loadOperation() {
       action: oFilters.action || undefined,
       target_type: oFilters.target_type || undefined,
     })
-    operations.value = data.items || []
+    const rows = data.items || []
+    operations.value = reset ? rows : [...operations.value, ...rows]
     oTotal.value = data.total || 0
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch { oError.value = true } finally {
     oLoading.value = false
   }
+}
+
+function loadMoreOperation() {
+  if (oLoading.value || operations.value.length >= oTotal.value) return
+  oPage.value += 1
+  loadOperation(false)
 }
 
 function reloadOperation() {
@@ -274,7 +318,11 @@ function reloadOperation() {
   loadOperation()
 }
 
-async function loadAudit() {
+async function loadAudit(reset = true) {
+  if (reset) {
+    aPage.value = 1
+    aError.value = false
+  }
   aLoading.value = true
   try {
     const data = await approvalsApi.logs({
@@ -283,11 +331,18 @@ async function loadAudit() {
       scope: 'all',
       action: aAction.value || undefined,
     })
-    audits.value = data.items || []
+    const rows = data.items || []
+    audits.value = reset ? rows : [...audits.value, ...rows]
     aTotal.value = data.total || 0
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch { aError.value = true } finally {
     aLoading.value = false
   }
+}
+
+function loadMoreAudit() {
+  if (aLoading.value || audits.value.length >= aTotal.value) return
+  aPage.value += 1
+  loadAudit(false)
 }
 
 async function loadActionCatalog() {
@@ -314,6 +369,23 @@ watch(tab, (v) => {
   }
 })
 
+// 滚动到底自动加载下一页；按钮保留为兜底入口
+useAutoLoadMore(
+  iSentinel,
+  () => !iLoading.value && interactions.value.length < iTotal.value,
+  loadMoreInteraction,
+)
+useAutoLoadMore(
+  oSentinel,
+  () => !oLoading.value && operations.value.length < oTotal.value,
+  loadMoreOperation,
+)
+useAutoLoadMore(
+  aSentinel,
+  () => !aLoading.value && audits.value.length < aTotal.value,
+  loadMoreAudit,
+)
+
 function formatTime(t) {
   if (!t) return '—'
   return new Date(t).toLocaleString('zh-CN', { hour12: false })
@@ -322,6 +394,12 @@ function formatTime(t) {
 
 <style scoped>
 .tab-body { display: flex; flex-direction: column; gap: var(--sp-4); }
-.pager { display: flex; justify-content: flex-end; padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--border); }
+.load-more {
+  display: flex;
+  justify-content: center;
+  min-height: 40px;
+  padding: var(--sp-2) var(--sp-4);
+}
+.load-more__done { font-size: var(--fs-xs); color: var(--text-placeholder); }
 .dim { color: var(--text-placeholder); font-size: var(--fs-xs); }
 </style>

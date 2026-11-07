@@ -367,6 +367,14 @@ export function applyHomeConfig(config) {
   if (!config || typeof config !== 'object') return
 
   assignStrings(hero, config.hero, ['eyebrow', 'titleLead', 'titleAccent', 'lead', 'note'])
+  // CTA 按钮文案：只接受已知字段，多余项忽略
+  if (Array.isArray(config.hero?.actions)) {
+    config.hero.actions.slice(0, hero.actions.length).forEach((item, index) => {
+      if (item && typeof item.label === 'string' && item.label.trim()) {
+        hero.actions[index].label = item.label
+      }
+    })
+  }
   mergeList(facts, config.facts, ['value', 'unit', 'label', 'hint'], 6)
 
   if (Array.isArray(config.slides)) {
@@ -393,6 +401,7 @@ const HOME_DEFAULTS = JSON.parse(JSON.stringify({
     titleAccent: hero.titleAccent,
     lead: hero.lead,
     note: hero.note,
+    actions: hero.actions.map(({ label }) => ({ label })),
   },
   facts,
   slides: showcase.slides.map(({ tag, title, desc, metric, image }) => ({

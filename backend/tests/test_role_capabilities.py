@@ -15,7 +15,7 @@ from app.services.feature_flags import public_features
 EXPECTED_TOOLS = {
     "student": [
         "rag_search", "course_evidence", "profile_query",
-        "code_executor", "reminder_scheduler",
+        "reminder_scheduler",
     ],
     "teacher": [
         "rag_search", "course_evidence", "profile_query",
@@ -24,7 +24,7 @@ EXPECTED_TOOLS = {
     ],
     "admin": [
         "rag_search", "course_evidence", "profile_query",
-        "code_executor", "doc_generator", "stats_analyzer",
+        "doc_generator", "stats_analyzer",
         "sql_query", "reminder_scheduler",
         "admin.course_list", "admin.material_stats", "admin.user_lookup",
         "admin.risk_summary", "admin.config_get",
@@ -95,7 +95,7 @@ def test_student_cannot_execute_teacher_only_tools(monkeypatch, name):
 @pytest.mark.parametrize(
     "name,arguments",
     [
-        ("rag_search", {"query": "等价类"}),
+        ("rag_search", {"query": "等价类", "course_id": 7}),
         ("doc_generator", {"doc_type": "lesson_plan", "data": {}}),
         ("stats_analyzer", {"course_id": 7, "metric": "weakness"}),
         ("reminder_scheduler", {"user_id": 11, "task_type": "review"}),
@@ -109,19 +109,22 @@ def test_teacher_can_execute_role_tools(monkeypatch, name, arguments):
 
     payload = tool_executor._execute_single(
         {"name": name, "arguments": arguments}, _state("teacher"),
+        approval=[name],
     )
     assert payload["ok"] is True
     assert payload["data"] == {"executed": name, "arguments": arguments}
 
 
 def test_allowed_tool_preserves_default_argument_injection(monkeypatch):
-    def target(course_id, user_id):
+    def target(course_id, user_id, **kwargs):
         return {"course_id": course_id, "user_id": user_id}
 
     monkeypatch.setitem(tool_executor.TOOL_REGISTRY, "reminder_scheduler", target)
 
     payload = tool_executor._execute_single(
-        {"name": "reminder_scheduler", "arguments": {}}, _state("teacher"),
+        {"name": "reminder_scheduler", "arguments": {"task_type": "review"}},
+        _state("teacher"),
+        approval=["reminder_scheduler"],
     )
     assert payload["ok"] is True
     assert payload["data"] == {"course_id": 7, "user_id": 11}
@@ -138,13 +141,15 @@ def test_unknown_tool_behavior_is_unchanged():
 
 
 def test_allowed_tool_exception_behavior_is_unchanged(monkeypatch):
-    def target():
+    def target(**kwargs):
         raise RuntimeError("boom")
 
     monkeypatch.setitem(tool_executor.TOOL_REGISTRY, "doc_generator", target)
 
     result = tool_executor._execute_single(
-        {"name": "doc_generator", "arguments": {}}, _state("teacher"),
+        {"name": "doc_generator",
+         "arguments": {"doc_type": "lesson_plan", "data": {}}},
+        _state("teacher"),
     )
     assert result["ok"] is False
     assert "工具 doc_generator 执行失败: boom" in result["error"]
@@ -175,7 +180,8 @@ def tutor_stubs(monkeypatch):
     return tutor, calls
 
 
-def test_tutor_runs_sandbox_for_student(tutor_stubs):
+def test_tutor_does_not_run_host_sandbox_for_student(tutor_stubs):
+    """宿主机代码执行已关闭:学生提问包含代码块也不得触发沙箱"""
     tutor, calls = tutor_stubs
     state = {
         "user_role": "student", "course_id": 7, "user_id": 11,
@@ -184,7 +190,7 @@ def test_tutor_runs_sandbox_for_student(tutor_stubs):
 
     asyncio.run(tutor.tutor_node(state))
 
-    assert len(calls) == 1
+    assert calls == [], "宿主机代码执行已关闭,仍执行了沙箱"
 
 
 def test_tutor_skips_sandbox_when_role_lacks_tool(tutor_stubs):

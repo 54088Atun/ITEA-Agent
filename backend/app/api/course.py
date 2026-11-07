@@ -1,7 +1,6 @@
 """课程路由:课程 CRUD / 知识点 / 教材上传"""
 import logging
 import mimetypes
-import shutil
 from pathlib import Path
 from typing import List, Optional
 
@@ -19,6 +18,7 @@ from app.models.classroom import CourseCollaborator, CourseEnrollment
 from app.schemas.course import CourseCollaboratorAdd, CourseCreate, CourseOut, MaterialOut
 from app.services.course_access import assert_course_visible, visible_course_ids
 from app.services.material_parser import safe_filename, validate_filename
+from app.services.uploads import UploadTooLarge, save_upload_limited
 from app.services.material_parse_jobs import (
     enqueue as enqueue_parse, material_out, process_parse_job,
 )
@@ -241,8 +241,12 @@ def upload_material(
     filename = safe_filename(file.filename or "upload")
     validate_filename(filename)
     file_path = save_dir / filename
-    with file_path.open("wb") as f:
-        shutil.copyfileobj(file.file, f)
+    try:
+        save_upload_limited(file, file_path, settings.MATERIAL_MAX_BYTES)
+    except UploadTooLarge as exc:
+        raise HTTPException(
+            status_code=413, detail=f"文件超过 {exc.limit_mb}MB 上限",
+        ) from exc
 
     material = CourseMaterial(
         course_id=course_id, type=type, title=title,

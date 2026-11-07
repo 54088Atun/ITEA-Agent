@@ -19,7 +19,10 @@ logger = logging.getLogger(__name__)
 TOOL_SCHEMAS = [
     {
         "name": "rag_search",
-        "description": "知识库检索:答疑/备课/出题前必调,返回带来源标注的知识片段",
+        "description": (
+            "知识库检索:仅在已构建课程索引时可用,未配置时返回明确不可用;"
+            "课程事实题优先使用 course_evidence"
+        ),
         "parameters": {
             "type": "object",
             "properties": {
@@ -33,23 +36,6 @@ TOOL_SCHEMAS = [
                 "top_k": {"type": "integer", "description": "返回条数,默认 5"},
             },
             "required": ["query", "course_id"],
-        },
-    },
-    {
-        "name": "code_executor",
-        "description": "沙箱执行代码:学生代码排错,返回 stdout/stderr/exit_code",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "code": {"type": "string", "description": "待执行代码"},
-                "language": {
-                    "type": "string",
-                    "enum": ["python", "java", "cpp"],
-                    "description": "编程语言,默认 python",
-                },
-                "timeout": {"type": "integer", "description": "超时秒数,上限 10"},
-            },
-            "required": ["code"],
         },
     },
     {
@@ -316,7 +302,7 @@ def _apply_scope_defaults(name: str, args: dict, state: AgentState,
 
     def _force(key: str, state_value) -> bool:
         """有上下文值时覆盖模型入参并留痕;返回是否已处理"""
-        if not state_value:
+        if state_value in (None, ""):
             return False
         requested = args.get(key)
         if requested not in (None, "", state_value):
@@ -327,38 +313,57 @@ def _apply_scope_defaults(name: str, args: dict, state: AgentState,
         args[key] = state_value
         return True
 
-    # 显式声明参数的走签名;仅用 **kwargs 接收的工具,只在模型传了该参数时收口
+    # 显式声明参数的走签名;仅用 **kwargs 接收的工具,按 schema 属性收口
     state_course = state.get("course_id")
     if "course_id" in signature:
-        if not _force("course_id", state_course) and "course_id" not in args:
-            args["course_id"] = 1  # 兼容旧行为:无课程上下文时用默认课程
-    elif state_course and "course_id" in args and "course_id" in properties:
+        _force("course_id", state_course)
+    elif state_course and "course_id" in properties:
         _force("course_id", state_course)
 
+    # 身份只认登录态:模型无权指定 user_id
     state_user = state.get("user_id")
     if "user_id" in signature:
-        _force("user_id", state_user)
-    elif state_user and "user_id" in args and "user_id" in properties:
-        _force("user_id", state_user)
+        if not _force("user_id", state_user):
+            args.pop("user_id", None)
+    elif "user_id" in properties:
+        if not _force("user_id", state_user):
+            args.pop("user_id", None)
 
 
-def _execute_single(call: dict, state: AgentState) -> dict:
-    """执行单个工具调用,所有出口统一走 tool_result 契约"""
+def _execute_single(call: dict, state: AgentState, approval=None,
+                    quota=None) -> dict:
+    """执行单个工具调用:权限、确认、参数、配额统一在本边界收口
+
+    - `approval` 只能是服务端构造的可信审批上下文;调用参数里的 `confirmed`
+      既不生效也不会传给工具。
+    - `quota` 为空时不计数,由节点/工具循环按单轮语义传入同一个实例。
+    """
     from app.agent.tools.gateway import (
         UNTRUSTED_TOOLS,
+        audit_tool_decision,
+        coerce_tool_approval,
         get_tool_spec,
         tool_result,
         validate_tool_arguments,
     )
 
     started = time.perf_counter()
-    name = call.get("name", "")
+    name = str(call.get("name") or "")
     args = dict(call.get("arguments") or {})
+    # 模型可伪造 arguments.confirmed,这里先行剔除,只认可信审批上下文
+    args.pop("confirmed", None)
+    role = state.get("user_role") or "student"
+    request_id = state.get("request_id")
+    approved = coerce_tool_approval(approval)
 
     def _elapsed() -> float:
         return (time.perf_counter() - started) * 1000
 
-    def _fail(message: str, **extra) -> dict:
+    def _deny(code: str, message: str, **extra) -> dict:
+        audit_tool_decision(
+            request_id=request_id, role=role, tool=name,
+            decision="deny", reason=code,
+        )
         payload = tool_result(False, None, error=message, latency_ms=_elapsed())
         # 保留顶层附加字段(available / requires_confirmation),兼容既有消费方
         payload.update(extra)
@@ -366,18 +371,34 @@ def _execute_single(call: dict, state: AgentState) -> dict:
 
     tool = TOOL_REGISTRY.get(name)
     if not tool:
-        return _fail(f"未知工具: {name}", available=list(TOOL_REGISTRY.keys()))
+        return _deny(
+            "unknown_tool", f"未知工具: {name}",
+            available=list(TOOL_REGISTRY.keys()),
+        )
 
     from app.services.capabilities import ROLE_CAPABILITIES, tool_denied_reason
 
-    role = state.get("user_role") or "student"
     denial = tool_denied_reason(role, name)
     if denial:
         logger.warning("工具越权被拒绝: role=%s tool=%s", role, name)
         available = ROLE_CAPABILITIES.get(role, {}).get("tools", [])
-        return _fail(denial, available=available)
+        return _deny("role_denied", denial, available=available)
 
     spec = get_tool_spec(name)
+
+    if quota is not None:
+        reason = quota.consume_batch()
+        if reason:
+            return _deny("batch_limit", reason)
+
+    if spec is not None and spec.requires_confirmation:
+        if approved is None or not approved.allows(name):
+            return _deny(
+                "confirmation_required",
+                f"高危工具 {name} 需用户确认后执行",
+                requires_confirmation=True,
+            )
+
     # 注入默认参数:course_id / user_id 从 state 补全并强制收口
     _apply_scope_defaults(name, args, state, tool, spec)
 
@@ -386,18 +407,27 @@ def _execute_single(call: dict, state: AgentState) -> dict:
         reason = validate_tool_arguments(spec, args, allowed_extra)
         if reason:
             logger.warning("工具参数被拒绝: %s", reason)
-            return _fail(reason)
+            return _deny("invalid_arguments", reason)
+
+    if quota is not None:
+        limit = spec.max_calls_per_turn if spec is not None else 3
+        reason = quota.consume_tool(name, limit)
+        if reason:
+            return _deny("quota_exceeded", reason)
 
     try:
         result = tool(**args)
     except TypeError as e:
         logger.warning("工具参数错误(%s): %s", name, e)
-        return _fail(f"工具 {name} 参数错误: {e}")
+        return _deny("execution_error", f"工具 {name} 参数错误: {e}")
     except Exception as e:
         logger.error("工具执行失败(%s): %s", name, e)
-        return _fail(f"工具 {name} 执行失败: {e}")
+        return _deny("execution_error", f"工具 {name} 执行失败: {e}")
 
     logger.info("工具执行成功: %s(args=%s)", name, list(args.keys()))
+    audit_tool_decision(
+        request_id=request_id, role=role, tool=name, decision="allow",
+    )
     if not isinstance(result, dict):
         result = {"result": result}
     return tool_result(
@@ -412,55 +442,29 @@ def _execute_single(call: dict, state: AgentState) -> dict:
 async def tool_executor_node(state: AgentState) -> dict:
     """工具执行节点:批量执行 tool_calls,结果合并写入 tool_results
 
-    安全策略(P1-6):单轮总量与单工具次数上限、高危工具需显式确认、
-    返回内容按不可信数据处理(命中指令覆盖就地中和)。
+    安全策略(P1-6):确认、角色/课程、参数白名单与单轮配额全部复用
+    `_execute_single` 共享边界,节点自身不复制另一套规则。
     """
     calls = state.get("tool_calls") or []
     if not calls:
         return {"tool_results": {}}
 
     from app.agent.tools.gateway import (
-        MAX_CALLS_PER_BATCH,
-        get_tool_spec,
-        tool_result,
+        TurnQuota,
+        coerce_tool_approval,
     )
 
+    approval = coerce_tool_approval(state.get("tool_approvals"))
+    quota = TurnQuota()
     results: dict[str, dict] = {}
-    counts: dict[str, int] = {}
     rejected = 0
     for i, call in enumerate(calls):
-        name = (call or {}).get("name", f"tool_{i}")
-        if i >= MAX_CALLS_PER_BATCH:
-            results[name] = tool_result(
-                False,
-                None,
-                error=f"单轮工具调用超过上限 {MAX_CALLS_PER_BATCH},已拒绝",
-            )
+        call = call or {}
+        name = call.get("name", f"tool_{i}")
+        payload = _execute_single(call, state, approval=approval, quota=quota)
+        if not payload.get("ok"):
             rejected += 1
-            continue
-
-        spec = get_tool_spec(name)
-        if spec is not None and spec.requires_confirmation and not call.get("confirmed"):
-            payload = tool_result(False, None, error=f"高危工具 {name} 需用户确认后执行")
-            # 顶层附加字段:前端据此弹出确认卡片
-            payload["requires_confirmation"] = True
-            results[name] = payload
-            rejected += 1
-            continue
-
-        limit = spec.max_calls_per_turn if spec is not None else 3
-        used = counts.get(name, 0)
-        if used >= limit:
-            results[name] = tool_result(
-                False,
-                None,
-                error=f"工具 {name} 单轮最多调用 {limit} 次",
-            )
-            rejected += 1
-            continue
-
-        counts[name] = used + 1
-        results[name] = sanitize_payload(_execute_single(call, state))
+        results[name] = sanitize_payload(payload)
 
     if rejected:
         logger.warning(

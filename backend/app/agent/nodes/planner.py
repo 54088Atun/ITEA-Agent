@@ -48,8 +48,8 @@ def _build_plan(branch: str, state: AgentState) -> list[dict]:
              {"query": query, "course_id": course_id}),
             ("读取学情档案,匹配讲解深度", "profile_query",
              {"course_id": course_id}),
-            ("按需运行示例代码验证思路", "code_executor",
-             {"code": "# 示例:验证关键步骤\nprint('ok')", "language": "python"}),
+            ("补充检索已建索引资料", "rag_search",
+             {"query": query, "course_id": course_id}),
         ],
         "review": [
             ("检索课程资料,确认复习范围", "course_evidence",

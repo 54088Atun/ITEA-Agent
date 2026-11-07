@@ -63,6 +63,27 @@ def test_main_installs_sensitive_filter_on_root_handlers(monkeypatch):
     )
 
 
+def test_main_reconfigures_streams_to_utf8(monkeypatch):
+    """Windows 中文日志:重配置 stdout/stderr 而不是给 basicConfig 加 encoding"""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "LLM_API_KEY", "test-key")
+    import app.main as main_module
+
+    calls = []
+
+    class FakeStream:
+        def reconfigure(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(main_module.sys, "stdout", FakeStream())
+    monkeypatch.setattr(main_module.sys, "stderr", FakeStream())
+
+    main_module._ensure_utf8_streams()
+
+    assert calls == [{"encoding": "utf-8", "errors": "replace"}] * 2
+
+
 def test_auth_register_and_login_logs_use_masked_email(caplog, monkeypatch):
     from sqlalchemy import create_engine, event
     from sqlalchemy.orm import sessionmaker

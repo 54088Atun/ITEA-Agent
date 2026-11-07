@@ -162,6 +162,7 @@ async def tutor_node(state: AgentState) -> dict:
             planner=planner,
             tools=tool_schemas_for_role(user_role),
             forced_call=forced_call,
+            approval=state.get("tool_approvals"),
             sink=state.get("stream_queue"),
         )
     except Exception as e:  # noqa: BLE001

@@ -1,5 +1,5 @@
 """持久化通知中心:发布触达、已读、分类偏好与免打扰"""
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta, timezone
 from types import SimpleNamespace
 import importlib
 
@@ -16,6 +16,7 @@ from app.api.teacher import create_interview_assignment
 from app.db.session import Base
 from app.models.classroom import ClassMember, Classroom, CourseEnrollment
 from app.models.course import Course
+from app.models.notification import Notification
 from app.models.profile import ReviewPlan, StudentProfile, WrongQuestion
 from app.models.user import User
 from app.schemas.assignment import AssignmentCreate
@@ -210,3 +211,112 @@ def test_review_reminder_is_persistent_and_deduplicated(db, monkeypatch):
     assert len(result["notifications"]) == 1
     assert result["notifications"][0]["category"] == "review"
     assert result["notifications"][0]["link_url"] == "/student/review"
+
+
+# ---------- 定时提醒写入 Notification ----------
+
+def _scheduler_session(monkeypatch, db):
+    SchedulerSession = sessionmaker(bind=db.get_bind())
+    monkeypatch.setattr("app.db.session.SessionLocal", SchedulerSession)
+
+
+def test_reminder_scheduler_persists_target_time(db, monkeypatch):
+    _scheduler_session(monkeypatch, db)
+    student = db.get(User, 3)
+    future = (datetime.utcnow() + timedelta(hours=2)).replace(microsecond=0)
+    trigger = future.replace(tzinfo=timezone.utc).isoformat()
+
+    result = reminder_scheduler.reminder_scheduler(3, "review", trigger)
+    assert result["scheduled"] is True
+    assert result["deliver_at"] == future.isoformat() + "Z"
+
+    # 未来提醒不可见
+    assert student_api.get_notifications(student, db)["notifications"] == []
+
+    # 同一触发时间重试只保留一条
+    again = reminder_scheduler.reminder_scheduler(3, "review", trigger)
+    assert again["scheduled"] is True
+    assert again["deliver_at"] == result["deliver_at"]
+    assert db.query(Notification).count() == 1
+
+    # 到期后可见
+    row = db.query(Notification).one()
+    row.deliver_at = datetime.utcnow() - timedelta(seconds=1)
+    db.commit()
+    notes = student_api.get_notifications(student, db)["notifications"]
+    assert len(notes) == 1
+    assert notes[0]["link_url"] == "/student/review"
+
+
+def test_reminder_scheduler_respects_quiet_hours(db, monkeypatch):
+    _scheduler_session(monkeypatch, db)
+    student = db.get(User, 3)
+    student_api.update_notification_preferences(
+        _preferences(quiet_start="00:00", quiet_end="23:59"), student, db,
+    )
+    db.commit()
+
+    tomorrow = (datetime.utcnow() + timedelta(days=1)).date()
+    target = datetime.combine(tomorrow, time(12, 0))
+    result = reminder_scheduler.reminder_scheduler(
+        3, "review", target.replace(tzinfo=timezone.utc).isoformat(),
+    )
+    assert result["scheduled"] is True
+    assert result["deliver_at"] == datetime.combine(tomorrow, time(23, 59)).isoformat() + "Z"
+
+    # 跨日免打扰:22:00-06:00 内的 23:00 提醒顺延到次日 06:00
+    student_api.update_notification_preferences(
+        _preferences(quiet_start="22:00", quiet_end="06:00"), student, db,
+    )
+    db.commit()
+    target = datetime.combine(tomorrow, time(23, 0))
+    cross = reminder_scheduler.reminder_scheduler(
+        3, "interview", target.replace(tzinfo=timezone.utc).isoformat(),
+    )
+    assert cross["scheduled"] is True
+    assert cross["deliver_at"] == datetime.combine(
+        tomorrow + timedelta(days=1), time(6, 0),
+    ).isoformat() + "Z"
+
+
+@pytest.mark.parametrize("value,reason", [
+    ("2026-12-01T09:00:00", "missing_timezone"),
+    ("not-a-time", "invalid_trigger_at"),
+])
+def test_reminder_scheduler_rejects_invalid_time(db, monkeypatch, value, reason):
+    _scheduler_session(monkeypatch, db)
+    result = reminder_scheduler.reminder_scheduler(3, "review", value)
+    assert result["scheduled"] is False
+    assert result["reason"] == reason
+    assert db.query(Notification).count() == 0
+
+
+def test_reminder_scheduler_respects_category_switch(db, monkeypatch):
+    _scheduler_session(monkeypatch, db)
+    student = db.get(User, 3)
+    student_api.update_notification_preferences(
+        _preferences(review_enabled=False), student, db,
+    )
+    db.commit()
+
+    result = reminder_scheduler.reminder_scheduler(
+        3, "review", "2026-12-01T09:00:00+08:00",
+    )
+    assert result["scheduled"] is False
+    assert result["reason"] == "category_disabled"
+    assert db.query(Notification).count() == 0
+
+
+def test_reminder_scheduler_reports_persist_failure(db, monkeypatch):
+    _scheduler_session(monkeypatch, db)
+
+    def boom(**kwargs):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(reminder_scheduler, "create_notification", boom)
+    result = reminder_scheduler.reminder_scheduler(
+        3, "review", "2026-12-01T09:00:00+08:00",
+    )
+    assert result["scheduled"] is False
+    assert result["reason"] == "persist_failed"
+    assert db.query(Notification).count() == 0

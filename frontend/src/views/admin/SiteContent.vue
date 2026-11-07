@@ -1,5 +1,5 @@
 <template>
-  <div class="page" v-loading="loading">
+  <div class="page">
     <div class="page-head">
       <div class="page-head__main">
         <h2 class="page-title">站点内容</h2>
@@ -27,14 +27,22 @@
       class="tip-alert"
     />
 
-    <el-tabs v-model="tab">
+    <SkeletonCard v-if="loading && !loaded" :rows="6" />
+    <StateBlock
+      v-else-if="loadError && !loaded"
+      state="error"
+      title="站点内容加载失败"
+      action-label="重新加载"
+      @retry="load"
+    />
+    <el-tabs v-else v-model="tab" v-loading="loading">
       <!-- ===== 首页 ===== -->
       <el-tab-pane label="首页" name="home">
         <div class="tab-body">
           <section class="panel">
             <div class="panel__head">
               <span class="panel__title">首屏文案</span>
-              <span class="panel__hint">标题拆成两段，第二段用铜金色强调</span>
+              <span class="panel__hint">标题拆成两段，第二段用铜金色强调；按钮文案对应首屏两个 CTA</span>
             </div>
             <div class="panel__body form-grid">
               <label class="field field--full">
@@ -56,6 +64,14 @@
               <label class="field field--full">
                 <span>标题下补充说明</span>
                 <el-input v-model="home.hero.note" :disabled="readonly" maxlength="40" />
+              </label>
+              <label class="field">
+                <span>主按钮文案</span>
+                <el-input v-model="home.hero.actions[0].label" :disabled="readonly" maxlength="10" show-word-limit />
+              </label>
+              <label class="field">
+                <span>次按钮文案</span>
+                <el-input v-model="home.hero.actions[1].label" :disabled="readonly" maxlength="10" show-word-limit />
               </label>
             </div>
           </section>
@@ -99,7 +115,7 @@
                 <div class="slide-media">
                   <img
                     v-if="slide.image && !failedImages[index]"
-                    :src="slide.image"
+                    :src="resolveAsset(slide.image)"
                     :alt="`第 ${index + 1} 张配图`"
                     class="slide-media__preview"
                     @error="failedImages[index] = true"
@@ -312,10 +328,13 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { adminApi } from '../../api/admin'
+import { resolveAsset } from '../../utils/asset.js'
 import { useUserStore } from '../../stores/user'
 import { useSiteStore } from '../../stores/site'
 import { homeDefaults } from '../home/content'
 import { contactDefaults } from '../contact/content'
+import SkeletonCard from '../../components/SkeletonCard.vue'
+import StateBlock from '../../components/StateBlock.vue'
 
 const userStore = useUserStore()
 const siteStore = useSiteStore()
@@ -323,6 +342,8 @@ const siteStore = useSiteStore()
 const tab = ref('home')
 const loading = ref(false)
 const saving = ref(false)
+const loadError = ref(false)
+const loaded = ref(false)
 const home = ref(homeDefaults())
 const contact = ref(contactDefaults())
 const imageInput = ref(null)
@@ -365,8 +386,16 @@ function mergeRows(baseRows, savedRows, keys) {
 function buildHome(saved) {
   const base = homeDefaults()
   if (!saved || typeof saved !== 'object') return base
+  const hero = pickStrings(saved.hero, base.hero)
+  const savedActions = Array.isArray(saved.hero?.actions) ? saved.hero.actions : []
+  hero.actions = base.hero.actions.map((action, index) => ({
+    ...action,
+    label: typeof savedActions[index]?.label === 'string' && savedActions[index].label.trim()
+      ? savedActions[index].label
+      : action.label,
+  }))
   return {
-    hero: pickStrings(saved.hero, base.hero),
+    hero,
     facts: mergeRows(base.facts, saved.facts, ['value', 'unit', 'label', 'hint']),
     slides: mergeRows(base.slides, saved.slides, ['tag', 'title', 'desc', 'metric', 'image']),
     closing: pickStrings(saved.closing, base.closing),
@@ -388,12 +417,16 @@ function buildContact(saved) {
 }
 
 async function load() {
+  loadError.value = false
   loading.value = true
   try {
     const data = await adminApi.siteContent()
     home.value = buildHome(data?.home)
     contact.value = buildContact(data?.contact)
-  } catch { /* 拦截器已提示 */ } finally {
+    loaded.value = true
+  } catch {
+    loadError.value = true /* 拦截器已提示 */
+  } finally {
     loading.value = false
   }
 }
@@ -404,6 +437,9 @@ function validate() {
     return '请填写首页标题的前后两句'
   }
   if (!home.value.closing.title.trim()) return '请填写首页收尾标题'
+  if (!home.value.hero.actions[0]?.label?.trim() || !home.value.hero.actions[1]?.label?.trim()) {
+    return '请填写首屏两个按钮文案'
+  }
   if (!contact.value.title.trim()) return '请填写联系页标题'
   if (!contact.value.channels.length) return '联系页至少保留一项联系方式'
   return ''

@@ -146,6 +146,27 @@ def test_bulk_import_rejects_bad_file(db):
     assert "缺少" in exc.value.detail
 
 
+@pytest.mark.parametrize("delta,status", [(0, 200), (-1, 413)])
+def test_bulk_import_enforces_actual_byte_limit(db, monkeypatch, delta, status):
+    from app.core.config import settings
+
+    classroom = _class(db)
+    head = db.get(User, 1)
+    content = "email,student_id\ns1@example.com,11\n".encode("utf-8")
+    # 上限恰好卡在文件实际字节;比实际字节少 1 时必须拒绝且不写成员记录
+    monkeypatch.setattr(settings, "CLASS_IMPORT_MAX_BYTES", len(content) + delta)
+
+    if status == 413:
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(import_members(classroom.id, _upload(content), head, db))
+        assert exc.value.status_code == 413
+        assert db.query(ClassMember).filter_by(class_id=classroom.id).count() == 0
+        return
+
+    result = asyncio.run(import_members(classroom.id, _upload(content), head, db))
+    assert result["imported"] == 1
+
+
 def test_xlsx_parser(db):
     from openpyxl import Workbook
     from app.services.class_import import parse_student_rows

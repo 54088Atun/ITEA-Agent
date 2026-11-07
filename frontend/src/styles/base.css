@@ -512,6 +512,35 @@ html.dark .md-body pre {
   opacity: 0;
 }
 
+/* 路由过渡：跨布局整屏淡出淡入（App.vue），同布局内容区轻量淡入（各 Layout） */
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.page-enter-active {
+  transition: opacity var(--dur) var(--ease-out), transform var(--dur) var(--ease-out);
+}
+.page-leave-to {
+  opacity: 0;
+}
+.page-leave-active {
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.page-fade-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.page-fade-enter-active {
+  transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+.page-fade-leave-to {
+  opacity: 0;
+}
+.page-fade-leave-active {
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     animation-duration: 0.01ms !important;

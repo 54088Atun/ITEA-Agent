@@ -88,6 +88,11 @@ def route_after_collab_plan(state: AgentState) -> str:
     return branch if branch in BUSINESS_NODES else "tutor"
 
 
+def route_after_business(state: AgentState) -> str:
+    """业务节点之后:有待执行工具调用才进入执行节点,否则直接进入计划调整"""
+    return "tool_executor" if state.get("tool_calls") else "plan_patch"
+
+
 def route_after_reflect(state: AgentState) -> str:
     """反思之后:通过→档案回写,未通过→回业务节点重写"""
     if state.get("reflection_passed", True):
@@ -188,9 +193,12 @@ def build_graph(checkpointer=None):
         "reflect": "reflect",
     })
 
-    # 业务节点 → 工具执行
+    # 业务节点 → 有工具调用:执行 / 无调用:直接计划调整(不进入执行节点)
     for n in BUSINESS_NODES:
-        g.add_edge(n, "tool_executor")
+        g.add_conditional_edges(n, route_after_business, {
+            "tool_executor": "tool_executor",
+            "plan_patch": "plan_patch",
+        })
 
     # 多 Agent 协作:规划 → (并行执行专家 | 降级单 Agent) → 汇总 → 统一校验
     g.add_conditional_edges("collab_plan", route_after_collab_plan, {
@@ -202,7 +210,10 @@ def build_graph(checkpointer=None):
         "admin": "admin",
     })
     g.add_edge("collab_execute", "collab_merge")
-    g.add_edge("collab_merge", "tool_executor")
+    g.add_conditional_edges("collab_merge", route_after_business, {
+        "tool_executor": "tool_executor",
+        "plan_patch": "plan_patch",
+    })
 
     # 工具执行 → 计划调整(用户在生成中途提交的约束在此生效)
     g.add_edge("tool_executor", "plan_patch")

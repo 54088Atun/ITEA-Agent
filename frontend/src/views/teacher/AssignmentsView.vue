@@ -21,7 +21,9 @@
     />
 
     <div class="panel">
-      <el-table :data="items" v-loading="loading">
+      <SkeletonTable v-if="loading && !items.length" :rows="6" :cols="6" />
+      <StateBlock v-else-if="error" state="error" @retry="load" />
+      <el-table v-else :data="items">
         <el-table-column prop="id" label="ID" width="70" />
         <el-table-column label="标题" min-width="200">
           <template #default="{ row }">
@@ -73,7 +75,11 @@
           </template>
         </el-table-column>
         <template #empty>
-          <div class="empty-state">还没有作业，点击右上角发布第一份作业或考试</div>
+          <StateBlock
+            state="empty"
+            title="还没有作业"
+            hint="点击右上角发布第一份作业或考试"
+          />
         </template>
       </el-table>
     </div>
@@ -83,8 +89,8 @@
       <el-form ref="formRef" :model="form" :rules="rules" label-width="96px">
         <el-form-item label="类型">
           <el-radio-group v-model="form.kind">
-            <el-radio-button label="homework">作业</el-radio-button>
-            <el-radio-button label="exam">考试</el-radio-button>
+            <el-radio-button value="homework">作业</el-radio-button>
+            <el-radio-button value="exam">考试</el-radio-button>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="标题" prop="title">
@@ -196,11 +202,14 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { teacherApi } from '../../api/teacher'
 import { classroomApi } from '../../api/classroom'
+import SkeletonTable from '../../components/SkeletonTable.vue'
+import StateBlock from '../../components/StateBlock.vue'
 
 const items = ref([])
 const courses = ref([])
 const classes = ref([])
 const loading = ref(false)
+const error = ref(false)
 
 const createVisible = ref(false)
 const saving = ref(false)
@@ -236,6 +245,7 @@ onMounted(load)
 
 async function load() {
   loading.value = true
+  error.value = false
   try {
     const [rows, cs, cls] = await Promise.all([
       teacherApi.assignments(),
@@ -245,7 +255,9 @@ async function load() {
     items.value = Array.isArray(rows) ? rows : []
     courses.value = Array.isArray(cs) ? cs : []
     classes.value = Array.isArray(cls) ? cls : []
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch {
+    error.value = true
+  } finally {
     loading.value = false
   }
 }
@@ -280,7 +292,8 @@ function openCreate() {
 }
 
 async function submitCreate() {
-  await formRef.value.validate()
+  const valid = await formRef.value.validate().catch(() => false)
+  if (!valid) return
   if (!form.course_id) {
     return ElMessage.warning('作业必须绑定课程，请先选择课程')
   }

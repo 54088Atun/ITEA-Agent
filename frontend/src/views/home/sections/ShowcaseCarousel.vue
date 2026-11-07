@@ -48,7 +48,7 @@
               <img
                 class="slide__img"
                 :class="{ 'is-loaded': loaded[index] }"
-                :src="slide.image"
+                :src="resolveAsset(slide.image)"
                 :alt="slide.alt"
                 :loading="index === 0 ? 'eager' : 'lazy'"
                 decoding="async"
@@ -107,6 +107,7 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { showcase } from '../content'
+import { resolveAsset } from '../../../utils/asset.js'
 
 const DURATION = 6000
 const active = ref(0)

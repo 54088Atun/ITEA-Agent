@@ -4,9 +4,17 @@
 执行仍由 tool_executor 按 TOOL_REGISTRY 完成，后续接入 LLM bind_tools 时
 直接复用这里的 schema，避免工具描述散落在各节点里。
 """
+import logging
 from dataclasses import dataclass
 
 from app.services.capabilities import ROLE_CAPABILITIES
+
+logger = logging.getLogger(__name__)
+
+# 工具决策审计:只记录决策元数据,从不记录调用参数
+tool_audit_logger = logging.getLogger("app.audit.tool")
+
+AUDIT_FIELDS = ("request_id", "role", "tool", "decision", "reason")
 
 
 @dataclass(frozen=True)
@@ -36,7 +44,10 @@ class ToolSpec:
 TOOL_SPECS: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="rag_search",
-        description="知识库检索:答疑、备课、出题前调用,返回带来源标注的知识片段",
+        description=(
+            "知识库检索:仅在已构建课程索引时可用,未配置时返回明确不可用;"
+            "课程事实题优先使用 course_evidence"
+        ),
         parameters={
             "type": "object",
             "properties": {
@@ -52,24 +63,6 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
             "required": ["query", "course_id"],
         },
         roles=("teacher", "student", "admin"),
-    ),
-    ToolSpec(
-        name="code_executor",
-        description="沙箱执行代码:学生代码排错,返回 stdout/stderr/exit_code",
-        parameters={
-            "type": "object",
-            "properties": {
-                "code": {"type": "string", "description": "待执行代码"},
-                "language": {
-                    "type": "string",
-                    "enum": ["python", "java", "cpp"],
-                    "description": "编程语言,默认 python",
-                },
-                "timeout": {"type": "integer", "description": "超时秒数,上限 10"},
-            },
-            "required": ["code"],
-        },
-        roles=("student", "admin"),
     ),
     ToolSpec(
         name="doc_generator",
@@ -354,8 +347,75 @@ def get_tool_spec(name: str) -> ToolSpec | None:
     return _SPEC_BY_NAME.get(name)
 
 
+@dataclass(frozen=True)
+class ToolApproval:
+    """可信审批上下文:只能由服务端在用户显式确认后构造
+
+    模型输出、工具 arguments 和客户端传入的 confirmed 都无权构造本对象,
+    因此 `requires_confirmation` 只能被真正的人工确认放行。
+    """
+
+    tools: frozenset[str] = frozenset()
+
+    def allows(self, name: str) -> bool:
+        return name in self.tools
+
+
+def coerce_tool_approval(value) -> ToolApproval | None:
+    """把服务端状态里的审批声明归一为可信对象;无法识别时按未确认处理"""
+    if value is None:
+        return None
+    if isinstance(value, ToolApproval):
+        return value
+    if isinstance(value, dict):
+        names = value.get("tools") or ()
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        names = value
+    else:
+        return None
+    tools = frozenset(str(item) for item in names if item)
+    return ToolApproval(tools=tools) if tools else None
+
+
+def audit_tool_decision(
+    *, request_id, role, tool, decision: str, reason: str = "",
+) -> None:
+    """记录工具决策审计:字段固定,严禁携带调用参数或业务正文"""
+    payload = {
+        "request_id": str(request_id or ""),
+        "role": str(role or ""),
+        "tool": str(tool or ""),
+        "decision": decision,
+        "reason": str(reason or ""),
+    }
+    tool_audit_logger.info("tool_decision", extra={"tool_audit": payload})
+
+
 # 单轮工具调用总量上限:超过只执行前 N 个,其余拒绝
 MAX_CALLS_PER_BATCH = 8
+
+
+class TurnQuota:
+    """单轮工具配额:由共享执行边界统一扣减,节点与工具循环复用同一规则"""
+
+    def __init__(self, batch_limit: int | None = None):
+        self.batch_limit = MAX_CALLS_PER_BATCH if batch_limit is None else batch_limit
+        self._batch = 0
+        self._used: dict[str, int] = {}
+
+    def consume_batch(self) -> str | None:
+        self._batch += 1
+        if self._batch > self.batch_limit:
+            return f"单轮工具调用超过上限 {self.batch_limit},已拒绝"
+        return None
+
+    def consume_tool(self, name: str, limit: int) -> str | None:
+        used = self._used.get(name, 0)
+        if used >= limit:
+            return f"工具 {name} 单轮最多调用 {limit} 次"
+        self._used[name] = used + 1
+        return None
+
 
 _TYPE_CHECKS = {
     "string": lambda v: isinstance(v, str),
@@ -372,8 +432,8 @@ def validate_tool_arguments(
 ) -> str | None:
     """按工具 schema 校验参数;返回拒绝原因,None 表示通过
 
-    只拦截「伪造参数、越界枚举、类型错误」,必填项缺失仍交给工具自身报错,
-    避免改变既有调用链的异常语义。
+    拦截「伪造参数、越界枚举、类型错误与缺失必填项」;必填参数缺失或为 None
+    时在执行前直接拒绝,不再交给工具自身报错。
     """
     if not isinstance(args, dict):
         return f"工具 {spec.name} 参数必须是对象"
@@ -394,6 +454,11 @@ def validate_tool_arguments(
         enum = schema.get("enum")
         if enum and args[key] not in enum:
             return f"工具 {spec.name} 参数 {key} 取值不在允许范围: {enum}"
+
+    required = (spec.parameters or {}).get("required") or []
+    for key in required:
+        if key not in args or args[key] is None:
+            return f"工具 {spec.name} 缺少必需参数: {key}"
     return None
 
 

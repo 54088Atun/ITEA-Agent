@@ -23,67 +23,56 @@
       class="tip"
     />
 
-    <div class="panel">
-      <el-table :data="items" v-loading="loading">
-        <el-table-column prop="id" label="ID" width="70" />
-        <el-table-column prop="name" label="班级名称" min-width="160" />
-        <el-table-column label="绑定课程" min-width="160">
-          <template #default="{ row }">
-            <span v-if="row.course_name">{{ row.course_name }}</span>
-            <span v-else class="dim">未绑定</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="semester" label="学期" width="110">
-          <template #default="{ row }">{{ row.semester || '—' }}</template>
-        </el-table-column>
-        <el-table-column label="我的角色" width="110">
-          <template #default="{ row }">
-            <el-tag
-              size="small" effect="light"
-              :type="row.my_role === 'head_teacher' ? 'success' : row.my_role === 'teacher' ? 'warning' : 'info'"
-            >
-              {{ roleLabel(row.my_role) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="学生数" width="100">
-          <template #default="{ row }">{{ row.member_count }} / {{ row.max_students }}</template>
-        </el-table-column>
-        <el-table-column label="课程码" width="150">
-          <template #default="{ row }">
+    <div v-if="loading && !items.length" class="class-grid">
+      <SkeletonCard v-for="n in 4" :key="n" :rows="3" />
+    </div>
+    <StateBlock v-else-if="error" state="error" @retry="load" />
+    <div v-else-if="items.length" class="class-grid">
+      <article v-for="row in items" :key="row.id" class="class-card">
+        <header class="class-card__head">
+          <span class="class-card__seal"><el-icon><Notebook /></el-icon></span>
+          <div class="class-card__title-wrap">
+            <h3 class="class-card__title">{{ row.name }}</h3>
+            <span class="class-card__sub">
+              {{ row.course_name || '未绑定课程' }} · {{ row.semester || '未设置学期' }}
+            </span>
+          </div>
+          <el-tag :type="row.status === 'active' ? 'success' : 'info'" size="small" effect="light">
+            {{ row.status === 'active' ? '进行中' : '已归档' }}
+          </el-tag>
+        </header>
+
+        <div class="class-card__meta">
+          <span class="class-card__stat">学生 {{ row.member_count }} / {{ row.max_students }}</span>
+          <el-tag
+            size="small" effect="plain"
+            :type="row.my_role === 'head_teacher' ? 'success' : row.my_role === 'teacher' ? 'warning' : 'info'"
+          >
+            {{ roleLabel(row.my_role) }}
+          </el-tag>
+          <span class="class-card__code">
+            课程码
             <el-button link type="primary" @click="copyCode(row.invite_code)">
               {{ row.invite_code }}
             </el-button>
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="90">
-          <template #default="{ row }">
-            <el-tag :type="row.status === 'active' ? 'success' : 'info'" size="small" effect="light">
-              {{ row.status === 'active' ? '进行中' : '已归档' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="320" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" @click="openReport(row)">学情</el-button>
-            <el-button link type="primary" @click="openMembers(row)">成员</el-button>
-            <el-button link type="primary" @click="openAnnouncements(row)">公告</el-button>
-            <el-button v-if="isHead(row)" link type="primary" @click="openEdit(row)">编辑</el-button>
-            <el-button v-if="isHead(row)" link type="warning" @click="resetInvite(row)">重置课程码</el-button>
-            <el-button
-              v-if="isHead(row) && row.status === 'active'"
-              link
-              type="danger"
-              @click="archive(row)"
-            >
-              归档
-            </el-button>
-          </template>
-        </el-table-column>
-        <template #empty>
-          <div class="empty-state">还没有班级，先新建一个并绑定课程</div>
-        </template>
-      </el-table>
+          </span>
+        </div>
+
+        <footer class="class-card__actions">
+          <el-button link type="primary" size="small" @click="openReport(row)">学情</el-button>
+          <el-button link type="primary" size="small" @click="openMembers(row)">成员</el-button>
+          <el-button link type="primary" size="small" @click="openAnnouncements(row)">公告</el-button>
+          <el-button v-if="isHead(row)" link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
+          <el-button v-if="isHead(row)" link type="warning" size="small" @click="resetInvite(row)">重置课程码</el-button>
+          <el-button
+            v-if="isHead(row) && row.status === 'active'"
+            link type="danger" size="small" @click="archive(row)"
+          >归档</el-button>
+        </footer>
+      </article>
+    </div>
+    <div v-else class="panel">
+      <StateBlock state="empty" title="还没有班级" hint="先新建一个班级并绑定课程" />
     </div>
 
     <div class="panel interview-panel">
@@ -108,7 +97,7 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="110" fixed="right">
+        <el-table-column label="操作" width="110" :fixed="isNarrow ? false : 'right'">
           <template #default="{ row }">
             <el-button link type="primary" @click="openInterviewRecords(row)">授权记录</el-button>
           </template>
@@ -460,12 +449,14 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { classroomApi } from '../../api/classroom'
 import { courseApi } from '../../api/course'
 import { teacherApi } from '../../api/teacher'
 import { useUserStore } from '../../stores/user'
+import SkeletonCard from '../../components/SkeletonCard.vue'
+import StateBlock from '../../components/StateBlock.vue'
 
 const userStore = useUserStore()
 
@@ -486,9 +477,15 @@ const INVITE_ROLE_OPTIONS = [
 ]
 
 const loading = ref(false)
+const error = ref(false)
 const saving = ref(false)
 const items = ref([])
 const courses = ref([])
+
+// 窄屏取消操作列固定，让表格整体横向滚动
+const isNarrow = ref(false)
+const narrowQuery = window.matchMedia('(max-width: 900px)')
+function syncNarrow(e) { isNarrow.value = e.matches }
 
 const formVisible = ref(false)
 const formRef = ref()
@@ -590,14 +587,21 @@ const interviewRecords = ref([])
 const recordAssignmentId = ref(null)
 
 onMounted(async () => {
+  isNarrow.value = narrowQuery.matches
+  narrowQuery.addEventListener('change', syncNarrow)
   await Promise.all([load(), loadCourses(), loadPermissions(), loadInterviewAssignments()])
 })
 
+onBeforeUnmount(() => narrowQuery.removeEventListener('change', syncNarrow))
+
 async function load() {
   loading.value = true
+  error.value = false
   try {
     items.value = await classroomApi.list()
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch {
+    error.value = true
+  } finally {
     loading.value = false
   }
 }
@@ -737,7 +741,8 @@ function openEdit(row) {
 }
 
 async function save() {
-  await formRef.value.validate()
+  const valid = await formRef.value.validate().catch(() => false)
+  if (!valid) return
   saving.value = true
   try {
     if (form.id) {
@@ -990,6 +995,67 @@ async function removeMember(row) {
 
 <style scoped>
 .tip { border-radius: var(--r-sm); }
+/* 班级卡片网格：与课程管理保持一致的信息密度 */
+.class-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--sp-4);
+}
+.class-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-5);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-xs);
+  transition: box-shadow var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.class-card:hover { box-shadow: var(--shadow-sm); border-color: var(--brand-300); }
+.class-card__head { display: flex; align-items: flex-start; gap: var(--sp-3); }
+.class-card__seal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border: 1px solid var(--brand-300);
+  border-radius: var(--r-sm);
+  color: var(--color-primary);
+  background: var(--color-primary-wash);
+}
+.class-card__title-wrap { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.class-card__title {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.class-card__sub { font-size: var(--fs-xs); color: var(--text-secondary); }
+.class-card__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+.class-card__stat { color: var(--text-primary); }
+.class-card__code { margin-left: auto; font-size: var(--fs-xs); color: var(--text-placeholder); }
+.class-card__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
+  padding-top: var(--sp-3);
+  border-top: 1px dashed var(--border);
+}
 .dim { color: var(--text-placeholder); font-size: var(--fs-xs); }
 .unit { margin-left: var(--sp-2); color: var(--text-secondary); font-size: var(--fs-sm); }
 .invite-row {

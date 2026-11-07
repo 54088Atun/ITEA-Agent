@@ -25,9 +25,15 @@
       <div class="empty-state">请先在右上角选择一门课程</div>
     </div>
 
-    <div v-else v-loading="loading" class="page__body">
+    <div v-else class="page__body">
+      <div v-if="loading && !progress" class="panel">
+        <div class="kpi-skeleton">
+          <SkeletonCard v-for="n in 4" :key="n" :rows="2" />
+        </div>
+      </div>
+
       <!-- 未加入课程 -->
-      <div v-if="!joined" class="panel">
+      <div v-else-if="!joined" class="panel">
         <div class="empty-state">
           <span>你还没有加入该课程</span>
           <el-button type="primary" @click="router.push('/student/tutor')">
@@ -47,28 +53,28 @@
             <div class="kpi">
               <div class="kpi__label">总体学习进度</div>
               <div class="kpi__value">
-                {{ Math.round(progress.overall_progress || 0) }}<span class="kpi__unit">分</span>
+                <CountUp :value="Math.round(progress.overall_progress || 0)" /><span class="kpi__unit">分</span>
               </div>
               <div class="kpi__hint">课程整体完成度</div>
             </div>
             <div class="kpi">
               <div class="kpi__label">已跟踪知识点</div>
               <div class="kpi__value">
-                {{ masteryList.length }}<span class="kpi__unit">个</span>
+                <CountUp :value="masteryList.length" /><span class="kpi__unit">个</span>
               </div>
               <div class="kpi__hint">已产生练习或对话记录</div>
             </div>
             <div class="kpi">
               <div class="kpi__label">掌握良好</div>
               <div class="kpi__value kpi__value--good">
-                {{ goodPoints.length }}<span class="kpi__unit">个</span>
+                <CountUp :value="goodPoints.length" /><span class="kpi__unit">个</span>
               </div>
               <div class="kpi__hint">掌握度 ≥ 80 分</div>
             </div>
             <div class="kpi">
               <div class="kpi__label">薄弱知识点</div>
               <div class="kpi__value kpi__value--weak">
-                {{ weakPoints.length }}<span class="kpi__unit">个</span>
+                <CountUp :value="weakPoints.length" /><span class="kpi__unit">个</span>
               </div>
               <div class="kpi__hint">掌握度 &lt; 60 分，建议优先补强</div>
             </div>
@@ -159,6 +165,8 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { studentApi } from '../../api/student'
 import { courseApi } from '../../api/course'
+import SkeletonCard from '../../components/SkeletonCard.vue'
+import CountUp from '../../components/CountUp.vue'
 
 const router = useRouter()
 const courses = ref([])
@@ -284,6 +292,12 @@ async function submitPractice() {
   gap: var(--sp-4);
   flex: 1;
   min-height: 240px;
+}
+
+.kpi-skeleton {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--sp-4);
 }
 
 /* KPI 数值语义色 */

@@ -284,6 +284,7 @@ def _build_initial_state(req: ChatRequest, user: User) -> AgentState:
         collab_plan=[],
         collab_results=[],
         tool_calls=[],
+        tool_approvals=None,
         tool_results={},
         rag_context="",
         sources=[],
@@ -673,6 +674,7 @@ async def _stream_graph(state: AgentState, db: Session, user: User,
                 else "blocked" if holder["branch"] == "block"
                 else "success"
             )
+            duration_ms = int((time.monotonic() - started_at) * 1000)
             finish_run(
                 run_id,
                 status=status,
@@ -680,7 +682,11 @@ async def _stream_graph(state: AgentState, db: Session, user: User,
                 output=holder["final"],
                 error="用户已取消" if cancelled else holder["error"],
                 steps=steps,
-                duration_ms=int((time.monotonic() - started_at) * 1000),
+                duration_ms=duration_ms,
+            )
+            logger.info(
+                "SSE 终态: run=%s status=%s branch=%s duration_ms=%s",
+                run_id, status, holder["branch"], duration_ms,
             )
             if run_id:
                 _running_tasks.pop(run_id, None)

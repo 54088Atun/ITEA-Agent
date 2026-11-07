@@ -37,6 +37,12 @@
             <span class="shell__user-name">{{ userStore.name }}</span>
             <span class="shell__user-role">{{ roleSuffix }}</span>
           </span>
+          <el-button
+            class="shell__user-compact" text circle title="个人中心" aria-label="个人中心"
+            @click="router.push('/profile')"
+          >
+            <el-icon><User /></el-icon>
+          </el-button>
           <el-button text class="shell__logout" @click="onLogout">
             <el-icon><SwitchButton /></el-icon>退出
           </el-button>
@@ -52,6 +58,7 @@
 
 <script setup>
 import { useRouter } from 'vue-router'
+import { User } from '@element-plus/icons-vue'
 import { useUserStore } from '../stores/user'
 
 defineProps({
@@ -271,6 +278,9 @@ function onLogout() {
   font-size: var(--fs-sm);
   color: var(--text-secondary);
 }
+.shell__user-compact {
+  display: none;
+}
 
 /* ===== 内容区：统一最大宽度 + 呼吸感留白 ===== */
 .shell__content {
@@ -303,6 +313,10 @@ function onLogout() {
   }
   .shell__menu :deep(.el-menu-item span) {
     display: none;
+  }
+  /* 窄屏保留紧凑个人中心入口,不恢复占宽的完整胶囊 */
+  .shell__user-compact {
+    display: inline-flex;
   }
 }
 </style>

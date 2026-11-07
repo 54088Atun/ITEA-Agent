@@ -179,6 +179,8 @@ def test_stream_response_appends_sources_footer(monkeypatch):
 
     monkeypatch.setattr(tutor_module, "llm_invoke", fake_llm)
     monkeypatch.setattr(chat_api, "get_graph", agent_graph.build_graph)
+    # 课程可见性由 prepare_node 的用例单测覆盖;此处只验证来源页脚链路
+    monkeypatch.setattr(agent_graph, "_visible_course_id", lambda state: 10)
     monkeypatch.setattr(chat_api, "_log_interaction", AsyncMock())
     monkeypatch.setattr(chat_api, "_persist_turn_sync", lambda *a, **k: None)
     monkeypatch.setattr(chat_api, "_sessions", {})
@@ -189,7 +191,10 @@ def test_stream_response_appends_sources_footer(monkeypatch):
     async def collect():
         return [
             event async for event in chat_api.stream_agent_response(
-                ChatRequest(session_id="sources-sse", message="解释二叉树的遍历"),
+                ChatRequest(
+                    session_id="sources-sse", course_id=10,
+                    message="解释二叉树的遍历",
+                ),
                 user, MagicMock(), force_branch="tutor",
             )
         ]

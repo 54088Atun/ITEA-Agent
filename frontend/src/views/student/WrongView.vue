@@ -19,6 +19,10 @@
       <div class="empty-state">请先在右上角选择一门课程</div>
     </div>
 
+    <div v-else-if="error" class="panel">
+      <StateBlock state="error" @retry="onCourseChange" />
+    </div>
+
     <template v-else>
       <!-- 空态:没有错题时由 Agent 按科目生成练习 -->
       <div v-if="!records.length && !loading" class="panel">
@@ -54,7 +58,8 @@
           <span class="panel__title">错题清单</span>
           <span class="panel__meta">点击题目可查看完整内容</span>
         </div>
-        <el-table :data="records" v-loading="loading" stripe class="wrong-table">
+        <SkeletonTable v-if="loading && !records.length" :rows="6" :cols="5" />
+        <el-table v-else :data="records" stripe class="wrong-table">
           <el-table-column label="题目内容" min-width="340">
             <template #default="{ row }">
               <div class="question-text" @click="expand(row)">{{ row.question_content }}</div>
@@ -73,13 +78,17 @@
           <el-table-column label="记录时间" width="170">
             <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="100" fixed="right">
+          <el-table-column label="操作" width="100" :fixed="isNarrow ? false : 'right'">
             <template #default="{ row }">
               <el-button link type="primary" @click="expand(row)">查看</el-button>
             </template>
           </el-table-column>
           <template #empty>
-            <div class="empty-state">本课程还没有错题记录，做错的题目会自动收进来</div>
+            <StateBlock
+              state="empty"
+              title="本课程还没有错题记录"
+              hint="做错的题目会自动收进来"
+            />
           </template>
         </el-table>
       </div>
@@ -153,17 +162,20 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import { studentApi } from '../../api/student'
 import { courseApi } from '../../api/course'
 import { renderMarkdown } from '../../utils/markdown'
+import SkeletonTable from '../../components/SkeletonTable.vue'
+import StateBlock from '../../components/StateBlock.vue'
 
 const courses = ref([])
 const courseId = ref(null)
 const kpMap = ref({})
 const records = ref([])
 const loading = ref(false)
+const error = ref(false)
 const dialogVisible = ref(false)
 const current = ref(null)
 const generating = ref(false)
@@ -171,10 +183,17 @@ const practiceVisible = ref(false)
 const practiceItems = ref([])
 const practiceRecommendation = ref(null)
 
+// 窄屏取消操作列固定，让表格整体横向滚动，避免固定列挤压内容
+const isNarrow = ref(false)
+const narrowQuery = window.matchMedia('(max-width: 900px)')
+function syncNarrow(e) { isNarrow.value = e.matches }
+
 const kpCount = computed(() => new Set(records.value.map((r) => r.kp_id).filter((id) => id != null)).size)
 const unclassified = computed(() => records.value.filter((r) => r.kp_id == null).length)
 
 onMounted(async () => {
+  isNarrow.value = narrowQuery.matches
+  narrowQuery.addEventListener('change', syncNarrow)
   try {
     const data = await courseApi.list()
     courses.value = Array.isArray(data) ? data : []
@@ -184,6 +203,8 @@ onMounted(async () => {
     }
   } catch { /* ignore */ }
 })
+
+onBeforeUnmount(() => narrowQuery.removeEventListener('change', syncNarrow))
 
 async function onCourseChange() {
   kpMap.value = {}
@@ -202,9 +223,12 @@ async function onCourseChange() {
 async function load() {
   if (!courseId.value) return
   loading.value = true
+  error.value = false
   try {
     records.value = await studentApi.wrongQuestions(courseId.value)
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch {
+    error.value = true
+  } finally {
     loading.value = false
   }
 }

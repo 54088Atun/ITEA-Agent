@@ -17,9 +17,11 @@ import logging
 from datetime import datetime, timedelta
 
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.agent.state import AgentState
+from app.core.time import normalize_seconds, utcnow
 from app.db.session import SessionLocal
 from app.models.profile import (
     StudentProfile, MasteryRecord, WrongQuestion, ReviewPlan,
@@ -94,6 +96,11 @@ def _resolve_kp_id(db: Session, course_id: int | None, kp_name: str) -> int | No
     return kp.id if kp else None
 
 
+def _normalize_review_at(value: datetime) -> datetime:
+    """复习时间统一到秒精度,与 MySQL DATETIME(0) 保持一致"""
+    return normalize_seconds(value)
+
+
 def _mastery_to_int(level) -> int:
     """掌握度统一为 0-100 整数(兼容 0-1 浮点输入)"""
     try:
@@ -151,7 +158,7 @@ def _load_pending_reviews(db: Session, profile_id: int) -> list[dict]:
         .where(
             WrongQuestion.profile_id == profile_id,
             ReviewPlan.status == "pending",
-            ReviewPlan.next_review_at <= datetime.utcnow(),
+            ReviewPlan.next_review_at <= utcnow(),
         )
         .order_by(ReviewPlan.next_review_at)
         .limit(5)
@@ -229,12 +236,9 @@ def load_profile_snapshot(
     return snapshot
 
 
-def memory_load_node(state: AgentState) -> dict:
-    """兼容旧调用:按需读取学情档案快照"""
-    snapshot = load_profile_snapshot(
-        state["user_id"], state.get("course_id"), state.get("user_role", "student"),
-    )
-    return {"profile_snapshot": snapshot}
+# 说明:不再提供 memory_load 图节点。个性化入口(tutor/review/interview/collab)
+# 在运行时通过 app.agent.data_api.fetch_profile 读取学情,避免预加载死数据;
+# load_profile_snapshot 保留给离线评估/诊断等直接调用场景。
 
 
 # ---------- 写:档案回写 ----------
@@ -327,15 +331,26 @@ def memory_write_node(state: AgentState) -> dict:
     # 三层记忆:情景/语义记忆为 user 级,无课程也能写(带来源会话与 TTL)
     _write_agent_memories(user_id, course_id, updates, state)
 
-    if not updates or not course_id:
-        return {"profile_updates": {}}
+    if not updates:
+        return {"profile_updates": {}, "profile_write_result": {
+            "written": [], "skipped_review_plans": [], "reason": "no_updates",
+        }}
+    if not course_id:
+        return {"profile_updates": {}, "profile_write_result": {
+            "written": [], "skipped_review_plans": [], "reason": "missing_course_id",
+        }}
 
     db = SessionLocal()
     written: list[str] = []
+    # 同轮新错题 id:显式计划若指向这些错题,说明首轮复习计划已自动生成
+    new_wq_ids: set[int] = set()
+    skipped_review_plans: list[dict] = []
     try:
         profile = _get_or_create_profile(db, user_id, course_id)
         if not profile:
-            return {"profile_updates": {}}
+            return {"profile_updates": {}, "profile_write_result": {
+                "written": [], "skipped_review_plans": [], "reason": "profile_unavailable",
+            }}
 
         # 1. 错题录入 + 自动生成首轮复习计划(遗忘曲线)
         for wq in (updates.get("wrong_questions") or [])[:MAX_ITEMS_PER_TURN["wrong_questions"]]:
@@ -351,9 +366,12 @@ def memory_write_node(state: AgentState) -> dict:
             )
             db.add(new_wq)
             db.flush()
+            new_wq_ids.add(new_wq.id)
             db.add(ReviewPlan(
                 wrong_question_id=new_wq.id,
-                next_review_at=datetime.utcnow() + timedelta(days=FORGETTING_INTERVALS[0]),
+                next_review_at=_normalize_review_at(
+                    utcnow() + timedelta(days=FORGETTING_INTERVALS[0])
+                ),
                 review_count=0,
                 interval_days=FORGETTING_INTERVALS[0],
                 status="pending",
@@ -374,7 +392,7 @@ def memory_write_node(state: AgentState) -> dict:
             level = _mastery_to_int(m.get("mastery_level", 0))
             if existing:
                 existing.mastery_level = level
-                existing.last_assessed_at = datetime.utcnow()
+                existing.last_assessed_at = utcnow()
             else:
                 db.add(MasteryRecord(
                     profile_id=profile.id,
@@ -383,19 +401,82 @@ def memory_write_node(state: AgentState) -> dict:
                 ))
             written.append("mastery")
 
-        # 3. 显式复习计划(带 wrong_question_id 时追加;None 已在错题录入时自动生成)
+        # 3. 显式复习计划:只能绑定当前 profile 的有效错题;None 不重复建计划
         for rp in (updates.get("review_plans") or [])[:MAX_ITEMS_PER_TURN["review_plans"]]:
-            wq_id = rp.get("wrong_question_id")
-            if not wq_id:
+            raw_id = rp.get("wrong_question_id")
+            if raw_id is None or raw_id == "":
+                # review.py 默认输出 None,首轮计划已随错题录入自动生成
+                skipped_review_plans.append({
+                    "wrong_question_id": None,
+                    "reason": "missing_wrong_question_id",
+                })
                 continue
-            db.add(ReviewPlan(
-                wrong_question_id=wq_id,
-                next_review_at=datetime.utcnow() + timedelta(days=FORGETTING_INTERVALS[0]),
-                review_count=0,
-                interval_days=FORGETTING_INTERVALS[0],
-                status="pending",
-            ))
-            written.append("review_plan")
+            try:
+                wq_id = int(raw_id)
+            except (TypeError, ValueError):
+                skipped_review_plans.append({
+                    "wrong_question_id": str(raw_id),
+                    "reason": "invalid_wrong_question_id",
+                })
+                continue
+            if wq_id in new_wq_ids:
+                skipped_review_plans.append({
+                    "wrong_question_id": wq_id,
+                    "reason": "same_turn_auto_plan_satisfied",
+                })
+                continue
+            owned = db.execute(
+                select(WrongQuestion.id).where(
+                    WrongQuestion.id == wq_id,
+                    WrongQuestion.profile_id == profile.id,
+                )
+            ).scalars().first()
+            if not owned:
+                skipped_review_plans.append({
+                    "wrong_question_id": wq_id,
+                    "reason": "wrong_question_not_found_or_foreign",
+                })
+                continue
+            existing_plan = db.execute(
+                select(ReviewPlan.id).where(
+                    ReviewPlan.wrong_question_id == wq_id,
+                    ReviewPlan.status == "pending",
+                )
+            ).scalars().first()
+            if existing_plan:
+                # 重试同一请求时不重复插入
+                skipped_review_plans.append({
+                    "wrong_question_id": wq_id,
+                    "reason": "existing_pending_plan",
+                })
+                continue
+            next_review_at = _normalize_review_at(
+                utcnow() + timedelta(days=FORGETTING_INTERVALS[0])
+            )
+            try:
+                # 唯一约束 (wrong_question_id, next_review_at) 兜底并发重复写入
+                with db.begin_nested():
+                    db.add(ReviewPlan(
+                        wrong_question_id=wq_id,
+                        next_review_at=next_review_at,
+                        review_count=0,
+                        interval_days=FORGETTING_INTERVALS[0],
+                        status="pending",
+                    ))
+            except IntegrityError:
+                existing_id = db.execute(
+                    select(ReviewPlan.id).where(
+                        ReviewPlan.wrong_question_id == wq_id,
+                        ReviewPlan.next_review_at == next_review_at,
+                    )
+                ).scalars().first()
+                skipped_review_plans.append({
+                    "wrong_question_id": wq_id,
+                    "reason": "existing_plan_conflict",
+                    "existing_plan_id": existing_id,
+                })
+            else:
+                written.append("review_plan")
 
         # 4. 面试记录(round 自增,question 存对话历史)
         for iv in (updates.get("interview_records") or [])[:MAX_ITEMS_PER_TURN["interview_records"]]:
@@ -424,10 +505,19 @@ def memory_write_node(state: AgentState) -> dict:
 
         db.commit()
         logger.info("档案回写完成(user=%s, items=%s)", user_id, written)
+        if skipped_review_plans:
+            logger.info(
+                "显式复习计划未写入(user=%s, reasons=%s)",
+                user_id,
+                [item["reason"] for item in skipped_review_plans],
+            )
     except Exception as e:
         db.rollback()
         logger.error("档案回写失败(user=%s): %s", user_id, e)
     finally:
         db.close()
 
-    return {"profile_updates": {}}
+    return {"profile_updates": {}, "profile_write_result": {
+        "written": written,
+        "skipped_review_plans": skipped_review_plans,
+    }}

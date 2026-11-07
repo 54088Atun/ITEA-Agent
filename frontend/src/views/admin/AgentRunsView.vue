@@ -47,7 +47,7 @@
         <el-option label="运行中 running" value="running" />
         <el-option label="已取消 cancelled" value="cancelled" />
       </el-select>
-      <el-input v-model="filters.user_id" placeholder="用户 ID" clearable style="width: 140px" />
+      <DebouncedInput v-model="filters.user_id" placeholder="用户 ID" clearable style="width: 140px" @keyup.enter="reloadRuns" @debounce="reloadRuns" />
       <el-select v-model="filters.branch" placeholder="全部分支" clearable style="width: 160px">
         <el-option label="备课 teacher" value="teacher" />
         <el-option label="助教 tutor" value="tutor" />
@@ -61,7 +61,9 @@
     </div>
 
     <div class="panel">
-      <el-table :data="runs" v-loading="loading">
+      <SkeletonTable v-if="loading && !runs.length" :rows="8" :cols="6" />
+      <StateBlock v-else-if="error" state="error" @retry="loadRuns" />
+      <el-table v-else :data="runs">
         <el-table-column prop="id" label="ID" width="70" />
         <el-table-column label="状态" width="100">
           <template #default="{ row }">
@@ -93,20 +95,21 @@
           </template>
         </el-table-column>
         <template #empty>
-          <div class="empty-state">暂无运行记录</div>
+          <StateBlock
+            state="empty"
+            title="暂无运行记录"
+            hint="调整状态、用户或分支筛选后重试"
+          />
         </template>
       </el-table>
 
-      <div class="pager">
-        <el-pagination
-          v-model:current-page="page"
-          v-model:page-size="size"
-          :total="total"
-          :page-sizes="[10, 20, 50]"
-          layout="total, sizes, prev, pager, next"
-          @current-change="loadRuns"
-          @size-change="reloadRuns"
-        />
+      <div ref="sentinel" class="load-more">
+        <el-button
+          v-if="runs.length < total"
+          text type="primary" :loading="loading"
+          @click="loadMoreRuns"
+        >加载更多（已加载 {{ runs.length }} / {{ total }}）</el-button>
+        <span v-else-if="runs.length" class="load-more__done">已加载全部 {{ total }} 条</span>
       </div>
     </div>
 
@@ -195,13 +198,19 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { adminApi } from '../../api/admin'
+import SkeletonTable from '../../components/SkeletonTable.vue'
+import StateBlock from '../../components/StateBlock.vue'
+import DebouncedInput from '../../components/DebouncedInput.vue'
+import { useAutoLoadMore } from '../../composables/useAutoLoadMore.js'
 
 const loading = ref(false)
+const error = ref(false)
 const runs = ref([])
 const total = ref(0)
 const page = ref(1)
 const size = ref(20)
 const filters = reactive({ status: '', user_id: '', branch: '' })
+const sentinel = ref(null)
 
 const stats = ref({ by_status: {}, avg_duration_ms: 0 })
 const totalRuns = computed(() =>
@@ -213,7 +222,11 @@ const detailLoading = ref(false)
 const detail = ref(null)
 const spans = ref([])
 
-async function loadRuns() {
+async function loadRuns(reset = true) {
+  if (reset) {
+    page.value = 1
+    error.value = false
+  }
   loading.value = true
   try {
     const data = await adminApi.agentRuns({
@@ -223,11 +236,20 @@ async function loadRuns() {
       user_id: filters.user_id || undefined,
       branch: filters.branch || undefined,
     })
-    runs.value = data.items || []
+    const rows = data.items || []
+    runs.value = reset ? rows : [...runs.value, ...rows]
     total.value = data.total || 0
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch {
+    error.value = true
+  } finally {
     loading.value = false
   }
+}
+
+function loadMoreRuns() {
+  if (loading.value || runs.value.length >= total.value) return
+  page.value += 1
+  loadRuns(false)
 }
 
 async function loadStats() {
@@ -312,6 +334,13 @@ onMounted(() => {
   loadRuns()
   loadStats()
 })
+
+// 滚动到底自动加载下一页；按钮保留为兜底入口
+useAutoLoadMore(
+  sentinel,
+  () => !loading.value && runs.value.length < total.value,
+  loadMoreRuns,
+)
 </script>
 
 <style scoped>
@@ -375,4 +404,11 @@ onMounted(() => {
   color: var(--text-placeholder);
   margin-bottom: 4px;
 }
+.load-more {
+  display: flex;
+  justify-content: center;
+  min-height: 40px;
+  padding: var(--sp-2) var(--sp-4);
+}
+.load-more__done { font-size: var(--fs-xs); color: var(--text-placeholder); }
 </style>

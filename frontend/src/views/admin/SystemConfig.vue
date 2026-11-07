@@ -33,7 +33,14 @@
     />
 
     <div class="panel">
-      <el-table :data="draft" v-loading="loading">
+      <SkeletonTable v-if="loading && !draft.length" :rows="4" :cols="4" />
+      <StateBlock
+        v-else-if="error && !draft.length"
+        state="error"
+        action-label="重新加载"
+        @retry="load"
+      />
+      <el-table v-else :data="draft" v-loading="loading">
         <el-table-column label="配置键" min-width="200">
           <template #default="{ row }">
             <el-input v-model="row.config_key" placeholder="config_key" :disabled="!userStore.canAdminWrite" />
@@ -59,7 +66,7 @@
           </template>
         </el-table-column>
         <template #empty>
-          <div class="empty-state">暂无配置项，可点击「新增配置项」添加</div>
+          <StateBlock state="empty" title="暂无配置项" hint="可点击右上角「新增配置项」添加" />
         </template>
       </el-table>
     </div>
@@ -71,21 +78,27 @@ import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { adminApi } from '../../api/admin'
 import { useUserStore } from '../../stores/user'
+import SkeletonTable from '../../components/SkeletonTable.vue'
+import StateBlock from '../../components/StateBlock.vue'
 
 const userStore = useUserStore()
 
 const loading = ref(false)
 const saving = ref(false)
+const error = ref(false)
 const draft = ref([])
 
 onMounted(load)
 
 async function load() {
+  error.value = false
   loading.value = true
   try {
     const data = await adminApi.config()
     draft.value = (data.items || []).map((it) => ({ ...it }))
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch {
+    error.value = true /* 拦截器已提示 */
+  } finally {
     loading.value = false
   }
 }

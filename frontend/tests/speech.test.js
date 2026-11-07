@@ -214,8 +214,11 @@ test('ChatWindow 提供 AI 朗读切换和不支持提示', () => {
 test('ChatWindow 在切换历史、新对话和卸载时停止朗读', () => {
   assert.match(
     chatWindowSource,
-    /async function openConversation\(item\) \{\s*if \(streaming\.value\) return\s*stopAnswerSpeech\(\)/,
+    /async function openConversation\(item\) \{\s*historyDrawerVisible\.value = false\s*if \(streaming\.value\) return\s*stopAnswerSpeech\(\)/,
   )
-  assert.match(chatWindowSource, /function newConversation\(\) \{\s*stopAnswerSpeech\(\)/)
+  assert.match(
+    chatWindowSource,
+    /function newConversation\(\) \{\s*historyDrawerVisible\.value = false\s*stopAnswerSpeech\(\)/,
+  )
   assert.match(chatWindowSource, /onBeforeUnmount\(\(\) => \{\s*stopAnswerSpeech\(\)/)
 })

@@ -4,14 +4,16 @@ from pathlib import Path
 from pydantic_settings import BaseSettings
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent  # backend/
+DEFAULT_DATABASE_URL = "mysql+pymysql://root:123456@localhost:3306/itea_agent?charset=utf8mb4"
+DEFAULT_SECRET_KEY = "change-this-to-a-random-secret-key"
 
 
 class Settings(BaseSettings):
     # 数据库
-    DATABASE_URL: str = "mysql+pymysql://root:123456@localhost:3306/itea_agent?charset=utf8mb4"
+    DATABASE_URL: str = DEFAULT_DATABASE_URL
 
     # JWT
-    SECRET_KEY: str = "change-this-to-a-random-secret-key"
+    SECRET_KEY: str = DEFAULT_SECRET_KEY
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
 
@@ -53,15 +55,21 @@ class Settings(BaseSettings):
     DRAFT_RETENTION_DAYS: int = 7
     CLEANUP_HOUR: int = 3
     CLEANUP_MINUTE: int = 30
+    # 实际上传字节上限(不信任 Content-Length)
+    MATERIAL_MAX_BYTES: int = 50 * 1024 * 1024
+    CLASS_IMPORT_MAX_BYTES: int = 5 * 1024 * 1024
 
     # 向量模型
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
 
     # 应用
+    ENVIRONMENT: str = "development"  # development/test/production
     APP_HOST: str = "0.0.0.0"
     APP_PORT: int = 8000
     STATIC_DIR: str = "static"
     UPLOAD_DIR: str = "uploads"
+    # CORS 显式来源(逗号分隔);生产禁止通配符 *
+    CORS_ALLOW_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     # 反思循环最大次数
     MAX_REFLECTION_ROUNDS: int = 2
@@ -100,6 +108,29 @@ class Settings(BaseSettings):
     class Config:
         env_file = str(BASE_DIR / ".env")
         env_file_encoding = "utf-8"
+
+    def __init__(self, **values):
+        super().__init__(**values)
+        if self.ENVIRONMENT.strip().lower() != "production":
+            return
+
+        invalid_fields = []
+        if not self.SECRET_KEY.strip() or self.SECRET_KEY == DEFAULT_SECRET_KEY:
+            invalid_fields.append("SECRET_KEY")
+        if not self.DATABASE_URL.strip() or self.DATABASE_URL == DEFAULT_DATABASE_URL:
+            invalid_fields.append("DATABASE_URL")
+        if "*" in self.cors_origins:
+            invalid_fields.append("CORS_ALLOW_ORIGINS")
+        if invalid_fields:
+            fields = ", ".join(invalid_fields)
+            raise RuntimeError(f"生产环境必须显式配置非空且非默认值: {fields}")
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [
+            origin.strip() for origin in self.CORS_ALLOW_ORIGINS.split(",")
+            if origin.strip()
+        ]
 
     @property
     def static_path(self) -> Path:

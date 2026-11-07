@@ -6,7 +6,7 @@ ROLE_CAPABILITIES = {
     "student": {
         "tools": [
             "rag_search", "course_evidence", "profile_query",
-            "code_executor", "reminder_scheduler",
+            "reminder_scheduler",
         ],
         "agents": ROLE_ALLOWED_AGENTS["student"],
         "course_data_scope": "enrolled_approved_courses",
@@ -23,7 +23,7 @@ ROLE_CAPABILITIES = {
     "admin": {
         "tools": [
             "rag_search", "course_evidence", "profile_query",
-            "code_executor", "doc_generator", "stats_analyzer",
+            "doc_generator", "stats_analyzer",
             "sql_query", "reminder_scheduler",
             "admin.course_list", "admin.material_stats", "admin.user_lookup",
             "admin.risk_summary", "admin.config_get",
@@ -47,6 +47,9 @@ def tool_denied_reason(role: str, name: str) -> str | None:
     决策 #1:可执行边界即角色能力矩阵。矩阵内放开,矩阵外一律拒绝,
     节点直调与 tool_executor 共用本函数,避免绕过。
     """
+    if name == "code_executor":
+        return "code_executor 不可用:宿主机代码执行已关闭"
+
     caps = ROLE_CAPABILITIES.get(role)
     if not caps:
         return f"未知角色: {role}"

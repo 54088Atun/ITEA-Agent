@@ -9,6 +9,9 @@ import logging
 import asyncio
 from datetime import datetime
 
+from app.core.time import to_utc_naive, utcnow
+from app.services.notifications import create_notification
+
 logger = logging.getLogger(__name__)
 
 # 全局通知队列:SSE 端点从此读取推送给前端
@@ -27,7 +30,7 @@ def push_notification(user_id: int, task_type: str, message: str):
     _notification_queue[user_id].append({
         "task_type": task_type,
         "message": message,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": utcnow().isoformat(),
     })
     # 队列上限 50 条,防止溢出
     if len(_notification_queue[user_id]) > 50:
@@ -50,7 +53,7 @@ def _scan_due_reviews():
     db = SessionLocal()
     pushed = 0
     try:
-        now = datetime.utcnow()
+        now = utcnow()
         due_plans = db.execute(
             select(ReviewPlan).where(
                 ReviewPlan.status == "pending",
@@ -131,6 +134,31 @@ def start_scheduler():
         logger.error("调度器启动失败(提醒功能降级): %s", e)
 
 
+REMINDER_MESSAGES = {
+    "review": "已为你安排错题复习提醒,到期将自动通知你复盘。",
+    "interview": "已为你安排面试实训提醒,请按时参加模拟面试。",
+}
+
+REMINDER_LINKS = {
+    "review": "/student/review",
+    "interview": "/student/interview",
+}
+
+
+def _parse_trigger_at(value: str) -> tuple[datetime | None, str]:
+    """解析带时区的 ISO 时间为 naive UTC;空值表示立即提醒"""
+    text = str(value or "").strip()
+    if not text:
+        return utcnow(), ""
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None, "invalid_trigger_at"
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None, "missing_timezone"
+    return to_utc_naive(parsed), ""
+
+
 def reminder_scheduler(
     user_id: int,
     task_type: str = "review",
@@ -141,23 +169,79 @@ def reminder_scheduler(
     Args:
         user_id: 用户 ID
         task_type: 任务类型(review/interview)
-        trigger_at: 触发时间(ISO 格式,MVP 直接即时入队)
+        trigger_at: 触发时间(带时区 ISO,如 2026-11-05T09:00:00+08:00)
 
     Returns:
-        {"scheduled": true, "task_type": ..., "message": ...}
+        写入成功才返回 scheduled=true,并给出数据库实际 deliver_at。
     """
-    messages = {
-        "review": "已为你安排错题复习提醒,到期将自动通知你复盘。",
-        "interview": "已为你安排面试实训提醒,请按时参加模拟面试。",
-    }
-    msg = messages.get(task_type, f"已为你安排 {task_type} 提醒。")
+    if task_type not in REMINDER_MESSAGES:
+        return {
+            "scheduled": False,
+            "task_type": task_type,
+            "reason": "unsupported_task_type",
+            "message": "仅支持 review 或 interview 提醒。",
+        }
+    target, error = _parse_trigger_at(trigger_at)
+    msg = REMINDER_MESSAGES[task_type]
+    if error:
+        return {
+            "scheduled": False,
+            "task_type": task_type,
+            "reason": error,
+            "message": "触发时间必须为带时区的 ISO 时间。",
+        }
 
-    # MVP:直接入队即时通知;生产环境应写入调度系统按 trigger_at 延时推送
-    push_notification(user_id, task_type, msg)
+    # 同一任务同一触发时间重试时命中唯一约束,不重复写入
+    slot = (
+        f"immediate:{target.date().isoformat()}"
+        if not str(trigger_at or "").strip()
+        else target.isoformat()
+    )
+    source_id = f"{task_type}:{slot}"
 
-    return {
-        "scheduled": True,
-        "task_type": task_type,
-        "trigger_at": trigger_at,
-        "message": msg,
-    }
+    from app.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        row = create_notification(
+            db=db,
+            user_id=user_id,
+            category=task_type,
+            title="学习提醒",
+            message=msg,
+            link_url=REMINDER_LINKS[task_type],
+            source_type="agent_reminder",
+            source_id=source_id,
+            target_at=target,
+        )
+        if row is None:
+            db.rollback()
+            return {
+                "scheduled": False,
+                "task_type": task_type,
+                "reason": "category_disabled",
+                "message": "该类提醒已在通知设置中关闭。",
+            }
+        db.commit()
+        logger.info(
+            "提醒已排期(user=%s, type=%s, deliver_at=%s)",
+            user_id, task_type, row.deliver_at.isoformat(),
+        )
+        return {
+            "scheduled": True,
+            "task_type": task_type,
+            "trigger_at": target.isoformat() + "Z",
+            "deliver_at": row.deliver_at.isoformat() + "Z",
+            "message": msg,
+        }
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        logger.error("提醒写入失败(user=%s, type=%s): %s", user_id, task_type, exc)
+        return {
+            "scheduled": False,
+            "task_type": task_type,
+            "reason": "persist_failed",
+            "message": "提醒保存失败,请稍后重试。",
+        }
+    finally:
+        db.close()

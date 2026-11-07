@@ -5,6 +5,7 @@ from typing import Optional
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.core.time import normalize_seconds, utcnow
 from app.models.classroom import ClassMember, CourseEnrollment
 from app.models.notification import Notification, NotificationPreference
 
@@ -40,7 +41,7 @@ def update_preferences(db: Session, user_id: int, req) -> dict:
         setattr(pref, f"{category}_enabled", getattr(req, f"{category}_enabled"))
     pref.quiet_start = req.quiet_start or None
     pref.quiet_end = req.quiet_end or None
-    pref.updated_at = datetime.utcnow()
+    pref.updated_at = utcnow()
     db.flush()
     return preference_out(pref)
 
@@ -78,8 +79,13 @@ def create_notification(
     link_url: Optional[str],
     source_type: str,
     source_id: str,
+    target_at: Optional[datetime] = None,
 ) -> Optional[Notification]:
-    """按来源幂等写入;分类关闭时跳过,免打扰时延迟可见"""
+    """按来源幂等写入;分类关闭时跳过,免打扰时延迟可见
+
+    target_at 为期望触达时间(naive UTC):通知不会早于该时间可见,
+    且该时间同样参与免打扰计算。
+    """
     existing = db.query(Notification).filter_by(
         user_id=user_id, source_type=source_type, source_id=str(source_id),
     ).first()
@@ -89,7 +95,10 @@ def create_notification(
     if category not in CATEGORIES or getattr(pref, f"{category}_enabled") is False:
         return None
     # MySQL 无小数秒 DATETIME 会四舍五入,避免即时通知被延迟到下一秒
-    now = datetime.utcnow().replace(microsecond=0)
+    now = utcnow()
+    base = now
+    if target_at is not None:
+        base = max(normalize_seconds(target_at), now)
     row = Notification(
         user_id=user_id,
         category=category,
@@ -99,7 +108,7 @@ def create_notification(
         source_type=source_type,
         source_id=str(source_id),
         is_read=False,
-        deliver_at=_delivery_time(pref, now),
+        deliver_at=_delivery_time(pref, base),
         created_at=now,
     )
     db.add(row)
@@ -173,7 +182,7 @@ def list_notifications(
 ) -> dict:
     delivered = db.query(Notification).filter(
         Notification.user_id == user_id,
-        Notification.deliver_at <= datetime.utcnow(),
+        Notification.deliver_at <= utcnow(),
     )
     unread_count = delivered.filter(Notification.is_read.is_(False)).count()
     query = delivered
@@ -194,14 +203,14 @@ def mark_notification_read(db: Session, user_id: int, notification_id: int) -> d
         raise HTTPException(status_code=404, detail="通知不存在")
     if not row.is_read:
         row.is_read = True
-        row.read_at = datetime.utcnow()
+        row.read_at = utcnow()
     db.flush()
     return notification_out(row)
 
 
 def mark_all_notifications_read(db: Session, user_id: int) -> int:
     rows = db.query(Notification).filter_by(user_id=user_id, is_read=False).all()
-    now = datetime.utcnow()
+    now = utcnow()
     for row in rows:
         row.is_read = True
         row.read_at = now

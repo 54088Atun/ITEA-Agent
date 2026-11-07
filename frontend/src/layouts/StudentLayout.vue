@@ -48,13 +48,17 @@
 
     <template #actions>
       <el-badge :value="notifCount" :hidden="notifCount === 0">
-        <el-button text circle @click="openNotifs">
+        <el-button text circle title="通知" aria-label="通知" @click="openNotifs">
           <el-icon :size="17"><Bell /></el-icon>
         </el-button>
       </el-badge>
     </template>
 
-    <router-view />
+    <router-view v-slot="{ Component }">
+      <Transition name="page-fade" mode="out-in">
+        <component :is="Component" />
+      </Transition>
+    </router-view>
   </AppShell>
 
   <!-- 通知抽屉 -->
@@ -101,7 +105,7 @@
       <el-empty v-if="notifs.length === 0" description="暂无通知" />
       <div v-else class="notification-list">
         <button
-          v-for="n in notifs" :key="n.id" type="button"
+          v-for="n in visibleNotifs" :key="n.id" type="button"
           class="notification-item" :class="{ 'notification-item--unread': !n.is_read }"
           @click="openNotification(n)"
         >
@@ -116,13 +120,14 @@
             <span v-else-if="!n.is_read" class="notification-item__link">标记已读</span>
           </span>
         </button>
+        <div v-if="visibleCount < notifs.length" ref="sentinelRef" class="notification-sentinel"></div>
       </div>
     </template>
   </el-drawer>
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import AppShell from './AppShell.vue'
@@ -143,6 +148,27 @@ const preferencesLoading = ref(false)
 const savingPreferences = ref(false)
 const preferences = ref(defaultPreferences())
 let pollTimer = null
+
+// 通知接口全量返回,数量大时分批增量挂载,避免抽屉一次性渲染长列表
+const LIST_INITIAL = 60
+const LIST_STEP = 40
+const visibleCount = ref(LIST_INITIAL)
+const visibleNotifs = computed(() => notifs.value.slice(0, visibleCount.value))
+const sentinelRef = ref(null)
+let listObserver = null
+
+watch(notifs, () => { visibleCount.value = LIST_INITIAL })
+
+watch(sentinelRef, (el) => {
+  if (!el) return
+  if (!listObserver) {
+    listObserver = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting) visibleCount.value += LIST_STEP
+    }, { rootMargin: '120px' })
+  }
+  listObserver.disconnect()
+  listObserver.observe(el)
+})
 
 function defaultPreferences() {
   return {
@@ -228,6 +254,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   if (pollTimer) clearInterval(pollTimer)
+  listObserver?.disconnect()
 })
 
 function formatTime(t) {
@@ -240,6 +267,7 @@ function formatTime(t) {
 <style scoped>
 .notification-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
 .notification-list { display: flex; flex-direction: column; gap: 10px; }
+.notification-sentinel { height: 1px; }
 .notification-item {
   display: flex; flex-direction: column; gap: 8px; width: 100%; padding: 14px;
   border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-card);

@@ -8,7 +8,9 @@
     </div>
 
     <div class="panel">
-      <el-table :data="items" v-loading="loading">
+      <SkeletonTable v-if="loading && !items.length" :rows="6" :cols="6" />
+      <StateBlock v-else-if="error" state="error" @retry="load" />
+      <el-table v-else :data="items">
         <el-table-column label="标题" min-width="220">
           <template #default="{ row }">
             <div class="cell-title">
@@ -45,7 +47,11 @@
           </template>
         </el-table-column>
         <template #empty>
-          <div class="empty-state">暂无作业，加入班级或选课后即可看到教师发布的作业</div>
+          <StateBlock
+            state="empty"
+            title="暂无作业"
+            hint="加入班级或选课后即可看到教师发布的作业"
+          />
         </template>
       </el-table>
     </div>
@@ -70,7 +76,7 @@
 
         <section v-if="detail.my_submission" class="block">
           <h4 class="block__title">{{ detail.state === 'draft' ? '我的草稿' : '我的提交' }}</h4>
-          <div class="block__text">{{ detail.my_submission.content }}</div>
+          <div class="block__text">{{ detail.my_submission.content || '（无内容）' }}</div>
         </section>
 
         <section v-if="detail.my_submission?.confirmed" class="block">
@@ -145,9 +151,12 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { studentApi } from '../../api/student'
+import SkeletonTable from '../../components/SkeletonTable.vue'
+import StateBlock from '../../components/StateBlock.vue'
 
 const items = ref([])
 const loading = ref(false)
+const error = ref(false)
 const drawerVisible = ref(false)
 const detailLoading = ref(false)
 const detail = ref(null)
@@ -159,10 +168,14 @@ onMounted(load)
 
 async function load() {
   loading.value = true
+  error.value = false
   try {
     const rows = await studentApi.assignments()
     items.value = Array.isArray(rows) ? rows : []
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch {
+    // 拦截器已提示,页面内保留可重试的错误态
+    error.value = true
+  } finally {
     loading.value = false
   }
 }

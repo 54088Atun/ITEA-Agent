@@ -26,7 +26,13 @@
         branch="teacher"
         :suggestions="suggestions"
       />
-      <el-empty v-else description="请先选择课程后再开始对话" class="empty-center" />
+      <StateBlock
+        v-else
+        state="empty"
+        title="请先选择课程"
+        hint="选择课程后即可让备课助手生成教学大纲与课堂活动"
+        class="empty-center"
+      />
     </div>
   </div>
 </template>
@@ -34,6 +40,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import ChatWindow from '../../components/ChatWindow.vue'
+import StateBlock from '../../components/StateBlock.vue'
 import { teacherApi } from '../../api/teacher'
 
 const courses = ref([])
@@ -67,5 +74,5 @@ function newSession() {
 
 <style scoped>
 .chat-container { flex: 1; min-height: 0; }
-.empty-center { height: 100%; }
+.empty-center { height: 100%; display: flex; align-items: center; justify-content: center; }
 </style>
