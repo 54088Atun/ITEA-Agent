@@ -1,0 +1,32 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+sqlalchemy==2.0.35
+pymysql==1.1.1
+cryptography==43.0.1
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+python-multipart==0.0.9
+pydantic==2.9.2
+pydantic-settings==2.5.2
+email-validator==2.2.0
+edge-tts>=7.0.0,<8.0.0
+
+# Agent(锁定到 requirements.txt 范围内的兼容组合,避免 pip 无限回溯)
+langgraph==0.2.60
+langchain-core==0.3.29
+langchain-community==0.3.13
+langchain-openai==0.2.14
+openai==1.109.1
+
+
+# 文档导出
+python-docx==1.1.2
+openpyxl==3.1.5
+pypdf>=5.0.0
+
+# 定时任务
+apscheduler==3.10.4
+
+# 测试
+httpx==0.27.2
