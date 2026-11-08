@@ -64,7 +64,6 @@ ITEA-Agent/
 │   ├── tests/              # 前端单元测试
 │   └── package.json
 ├── init_db.sql             # MySQL 数据库初始化脚本
-├── start-dev.bat           # Windows 本地开发启动脚本
 └── LICENSE
 ```
 
@@ -143,8 +142,6 @@ npm run dev -- --host 127.0.0.1
 ```
 
 访问 `http://127.0.0.1:5173`。Vite 会将 `/api`、`/uploads` 和 `/static` 代理到 `http://127.0.0.1:8000`，因此前端开发服务启动前应先启动后端。
-
-完成数据库、环境变量和依赖配置后，Windows 用户也可以运行根目录的 `start-dev.bat` 同时启动前后端。
 
 ## 可选能力
 

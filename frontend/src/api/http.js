@@ -24,6 +24,11 @@ http.interceptors.response.use(
       ? '服务响应超时，请检查后端是否正常运行'
       : null
     const msg = err.response?.data?.detail || timeoutMsg || err.message || '请求失败'
+    // 登录接口的失败由登录页内联提示,这里不再弹全局消息,也不要清掉已有会话
+    const isLoginRequest = (err.config?.url || '').includes('/auth/login')
+    if (isLoginRequest) {
+      return Promise.reject(err)
+    }
     if (err.response?.status === 401) {
       // token 失效,清除并跳转登录
       localStorage.removeItem('itea_token')

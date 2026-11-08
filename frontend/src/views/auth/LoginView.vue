@@ -34,14 +34,22 @@
           <p>{{ tab === 'login' ? '使用校园邮箱进入你的工作空间' : '注册后可直接进入对应身份的工作台' }}</p>
         </header>
 
-        <el-tabs v-model="tab" stretch class="auth__tabs">
+        <el-tabs v-model="tab" stretch class="auth__tabs" @tab-change="clearLoginError">
           <el-tab-pane label="登录" name="login">
             <el-form ref="loginFormRef" :model="loginForm" :rules="loginRules" label-position="top" @keyup.enter="doLogin">
+              <el-alert
+                v-if="loginError"
+                class="auth__error"
+                :title="loginError"
+                type="error"
+                :closable="false"
+                show-icon
+              />
               <el-form-item prop="email" label="邮箱">
-                <el-input v-model="loginForm.email" placeholder="name@campus.edu" size="large" :prefix-icon="Message" />
+                <el-input v-model="loginForm.email" placeholder="name@campus.edu" size="large" :prefix-icon="Message" @input="clearLoginError" />
               </el-form-item>
               <el-form-item prop="password" label="密码">
-                <el-input v-model="loginForm.password" type="password" placeholder="请输入密码" size="large" :prefix-icon="Lock" show-password />
+                <el-input v-model="loginForm.password" type="password" placeholder="请输入密码" size="large" :prefix-icon="Lock" show-password @input="clearLoginError" />
               </el-form-item>
               <el-button type="primary" size="large" class="auth__submit" :loading="loading" @click="doLogin">
                 登 录
@@ -92,6 +100,7 @@ const userStore = useUserStore()
 const initialRole = route.query.role === 'teacher' ? 'teacher' : 'student'
 const tab = ref(route.query.mode === 'register' ? 'register' : 'login')
 const loading = ref(false)
+const loginError = ref('')
 const loginFormRef = ref()
 const regFormRef = ref()
 
@@ -109,16 +118,34 @@ const regRules = {
   role: [{ required: true, message: '请选择角色', trigger: 'change' }],
 }
 
+function clearLoginError() {
+  loginError.value = ''
+}
+
 async function doLogin() {
   // 校验失败是正常分支,不能变成未处理的 Promise rejection
   const valid = await loginFormRef.value.validate().catch(() => false)
   if (!valid) return
+  loginError.value = ''
   loading.value = true
   try {
     await userStore.login(loginForm.email, loginForm.password)
     ElMessage.success('登录成功')
     router.push(userStore.homePath)
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch (err) {
+    // 登录接口错误由页面内提示,不走全局弹窗,避免重复打扰
+    const status = err?.response?.status
+    const detail = err?.response?.data?.detail
+    if (status === 401) {
+      loginError.value = '账号或密码错误，请重新输入'
+    } else if (status === 403) {
+      loginError.value = typeof detail === 'string' ? detail : '账号已被禁用，请联系管理员'
+    } else if (!err?.response) {
+      loginError.value = '无法连接服务器，请稍后重试'
+    } else {
+      loginError.value = typeof detail === 'string' ? detail : '登录失败，请稍后重试'
+    }
+  } finally {
     loading.value = false
   }
 }
@@ -327,6 +354,13 @@ async function doRegister() {
 }
 .auth__tabs :deep(.el-form-item) {
   margin-bottom: var(--sp-4);
+}
+.auth__error {
+  margin-bottom: var(--sp-4);
+}
+.auth__error :deep(.el-alert__title) {
+  font-size: var(--fs-sm);
+  line-height: 1.6;
 }
 .auth__tabs :deep(.el-form-item__label) {
   font-size: var(--fs-xs);
