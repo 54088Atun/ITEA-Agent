@@ -47,20 +47,27 @@
       role="img"
       :aria-label="ariaLabel"
     >
-      <g v-for="tick in yTicks" :key="`grid-${tick.value}`">
-        <line
-          :x1="pad.left" :x2="640 - pad.right"
-          :y1="tick.y" :y2="tick.y"
-          stroke="var(--border)" stroke-dasharray="3 4"
-        />
-        <text :x="pad.left - 8" :y="tick.y + 4" text-anchor="end" class="axis-label">
-          {{ tick.label }}
-        </text>
-      </g>
+      <!-- 横向条形图不使用纵轴数值刻度:数值标签会压住左侧类别名 -->
+      <template v-if="type !== 'hbar'">
+        <g v-for="tick in yTicks" :key="`grid-${tick.value}`">
+          <line
+            :x1="pad.left" :x2="640 - pad.right"
+            :y1="tick.y" :y2="tick.y"
+            stroke="var(--border)" stroke-dasharray="3 4"
+          />
+          <text :x="pad.left - 8" :y="tick.y + 4" text-anchor="end" class="axis-label">
+            {{ tick.label }}
+          </text>
+        </g>
+      </template>
 
       <template v-if="type === 'hbar'">
         <g v-for="(item, index) in hbars" :key="`hbar-${item.label}`">
-          <text :x="0" :y="item.y + 4" class="hbar__label">{{ item.label }}</text>
+          <!-- 右对齐到条形起点,类别名像表头一样贴住表体 -->
+          <text
+            :x="labelWidth - 8" :y="item.y + 4"
+            text-anchor="end" class="hbar__label"
+          >{{ item.label }}</text>
           <rect
             :x="labelWidth" :y="item.y - item.height / 2"
             :width="item.width" :height="item.height"
@@ -296,7 +303,8 @@ const hbars = computed(() => {
     const value = item.values[index] || 0
     const width = Math.max(2, (value / maxValue.value) * available)
     return {
-      label: label.length > 11 ? `${label.slice(0, 11)}…` : label,
+      // 标签右对齐到 112px 列内,9 个中文字符(约 99px)不会溢出
+      label: label.length > 9 ? `${label.slice(0, 9)}…` : label,
       value,
       width,
       color: PALETTE[index % PALETTE.length],
