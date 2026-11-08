@@ -13,6 +13,7 @@
 import inspect
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 
 from openai import AsyncOpenAI
@@ -26,6 +27,31 @@ _client: AsyncOpenAI | None = None
 # 单次调用上限:超过即抛超时,避免网络抖动时请求无限挂起、占满数据库连接池
 LLM_TIMEOUT_SECONDS = 90
 LLM_MAX_RETRIES = 1
+
+# OpenAI 规范要求 function name 匹配 ^[a-zA-Z0-9_-]+$。
+# 内部工具名按点号分组(如 project.search_code)便于权限矩阵与日志阅读,
+# 只在传输层替换成下划线,回包时再还原,避免改动注册表与能力矩阵。
+_WIRE_NAME_PATTERN = re.compile(r"[^a-zA-Z0-9_-]")
+
+
+def to_wire_name(name: str) -> str:
+    """内部工具名 → 模型可见的 function name"""
+    return _WIRE_NAME_PATTERN.sub("_", str(name or ""))
+
+
+def from_wire_name(name: str) -> str:
+    """模型返回的 function name → 内部工具名;无对应注册项时原样返回"""
+    raw = str(name or "")
+    if not raw or "." in raw:
+        return raw
+    from app.agent.tools import TOOL_REGISTRY
+
+    if raw in TOOL_REGISTRY:
+        return raw
+    for candidate in TOOL_REGISTRY:
+        if to_wire_name(candidate) == raw:
+            return candidate
+    return raw
 
 
 def accepts_tools(fn) -> bool:
@@ -130,7 +156,7 @@ def _to_openai_call(call: dict, index: int) -> dict:
         "id": call.get("id") or f"call_{index}",
         "type": "function",
         "function": {
-            "name": str(call.get("name") or ""),
+            "name": to_wire_name(call.get("name")),
             "arguments": arguments or "{}",
         },
     }
@@ -141,12 +167,16 @@ def _to_openai_tools(tools: list[dict]) -> list[dict]:
     converted = []
     for tool in tools or []:
         if tool.get("type") == "function":
-            converted.append(tool)
+            item = dict(tool)
+            function = dict(item.get("function") or {})
+            function["name"] = to_wire_name(function.get("name"))
+            item["function"] = function
+            converted.append(item)
             continue
         converted.append({
             "type": "function",
             "function": {
-                "name": tool.get("name", ""),
+                "name": to_wire_name(tool.get("name")),
                 "description": tool.get("description", ""),
                 "parameters": tool.get("parameters") or {
                     "type": "object", "properties": {},
@@ -168,7 +198,7 @@ def _extract_tool_calls(resp) -> list[dict]:
             continue
         extracted.append({
             "id": call.get("id") or f"call_{index}",
-            "name": name,
+            "name": from_wire_name(name),
             "arguments": call.get("args") or call.get("arguments") or {},
         })
     return extracted
@@ -222,7 +252,7 @@ class _Bound:
         for call in message.tool_calls or []:
             calls.append({
                 "id": call.id,
-                "name": call.function.name,
+                "name": from_wire_name(call.function.name),
                 "arguments": _parse_arguments(call.function.arguments),
             })
         return _Resp(
@@ -313,7 +343,7 @@ async def _stream_decision(bound_llm, messages: list[dict], sink) -> _Resp:
             continue
         final_calls.append({
             "id": slot["id"] or f"call_{index}",
-            "name": slot["name"],
+            "name": from_wire_name(slot["name"]),
             "arguments": _parse_arguments(slot["arguments"]),
         })
     return _Resp(

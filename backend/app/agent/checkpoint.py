@@ -161,6 +161,10 @@ class DBCheckpointSaver(BaseCheckpointSaver):
     def _to_tuple(self, row: AgentCheckpoint, config: Optional[dict] = None) -> Optional[CheckpointTuple]:
         try:
             checkpoint = self._strip(self._load(row.state))
+            # 兼容跨版本检查点:0.2.x 的 Pregel 直接下标读取 pending_sends,
+            # 旧版/新版落盘快照可能没有该字段,补齐避免恢复时 KeyError
+            if isinstance(checkpoint, dict):
+                checkpoint.setdefault("pending_sends", [])
             metadata = self._load(row.checkpoint_meta) or {}
         except Exception as exc:  # noqa: BLE001
             logger.warning("检查点解析失败 id=%s: %s", row.id, exc)
