@@ -28,7 +28,7 @@ def _state(**overrides):
         "task_plan": [],
         "current_step": 0,
         "collaborate": True,
-        "collab_plan": [],
+        "collab_tasks": [],
         "collab_results": [],
         "tool_calls": [],
         "tool_results": {},
@@ -91,7 +91,7 @@ def test_collab_plan_node_uses_llm_plan(monkeypatch):
     queue = asyncio.Queue()
     result = asyncio.run(collab_module.collab_plan_node(_state(stream_queue=queue)))
 
-    assert [p["agent"] for p in result["collab_plan"]] == ["tutor", "review"]
+    assert [p["agent"] for p in result["collab_tasks"]] == ["tutor", "review"]
     events = _drain(queue)
     assert events[0][0] == "collab_plan"
     assert events[0][1]["source"] == "llm"
@@ -108,7 +108,7 @@ def test_collab_plan_node_falls_back(monkeypatch):
         _state(user_role="student", stream_queue=queue)
     ))
 
-    assert [p["agent"] for p in result["collab_plan"]] == ["tutor", "review"]
+    assert [p["agent"] for p in result["collab_tasks"]] == ["tutor", "review"]
     assert _drain(queue)[0][1]["source"] == "fallback"
 
 
@@ -122,7 +122,7 @@ def test_collab_execute_node_collects_results_and_errors(monkeypatch):
     queue = asyncio.Queue()
     state = _state(
         stream_queue=queue,
-        collab_plan=[
+        collab_tasks=[
             {"agent": "tutor", "task": "解释概念"},
             {"agent": "review", "task": "分析错题"},
         ],
@@ -271,7 +271,7 @@ def test_collab_execute_runs_experts_in_parallel(monkeypatch):
 
     monkeypatch.setattr(collab_module, "_run_expert", slow_expert)
     state = _state(
-        collab_plan=[
+        collab_tasks=[
             {"agent": "tutor", "task": "解释概念"},
             {"agent": "review", "task": "分析错题"},
             {"agent": "interview", "task": "面试建议"},
@@ -299,7 +299,7 @@ def test_collab_plan_degrades_to_single_agent_for_simple_request(monkeypatch):
     result = asyncio.run(collab_module.collab_plan_node(_state(stream_queue=queue)))
 
     assert result["branch"] == "review"
-    assert result["collab_plan"] == []
+    assert result["collab_tasks"] == []
     assert result["collab_results"] == []
     event = _drain(queue)[0]
     assert event[0] == "collab_plan"
@@ -315,7 +315,7 @@ def test_collab_plan_degrades_admin_to_admin_assistant(monkeypatch):
     result = asyncio.run(collab_module.collab_plan_node(_state(user_role="admin")))
 
     assert result["branch"] == "admin"
-    assert result["collab_plan"] == []
+    assert result["collab_tasks"] == []
 
 
 def test_collab_plan_single_agent_keyword_fallback(monkeypatch):
@@ -336,17 +336,17 @@ def test_graph_routes_after_collab_plan_by_plan_presence():
     assert "collab_plan" in nodes and "collab_execute" in nodes
 
     assert agent_graph.route_after_collab_plan(
-        {"collab_plan": [{"agent": "tutor", "task": "x"}]}
+        {"collab_tasks": [{"agent": "tutor", "task": "x"}]}
     ) == "collab_execute"
     assert agent_graph.route_after_collab_plan(
-        {"branch": "tutor", "collab_plan": []}
+        {"branch": "tutor", "collab_tasks": []}
     ) == "tutor"
     assert agent_graph.route_after_collab_plan(
-        {"branch": "admin", "collab_plan": []}
+        {"branch": "admin", "collab_tasks": []}
     ) == "admin"
     # 分支异常时回落到 tutor,避免条件边指向未注册节点
     assert agent_graph.route_after_collab_plan(
-        {"branch": "team", "collab_plan": []}
+        {"branch": "team", "collab_tasks": []}
     ) == "tutor"
 
 
@@ -524,7 +524,7 @@ def test_resume_state_keeps_collaboration_context(monkeypatch):
         "session_id": "collab-resume",
         "branch": "team",
         "run_id": 9,
-        "collab_plan": [{"agent": "tutor", "task": "解释概念"}],
+        "collab_tasks": [{"agent": "tutor", "task": "解释概念"}],
         "collab_results": [{
             "agent": "tutor", "label": "答疑专家", "task": "解释概念",
             "output": "先讲概念", "status": "done", "tokens": 10,
@@ -539,7 +539,7 @@ def test_resume_state_keeps_collaboration_context(monkeypatch):
     state = chat_api.build_resume_state("collab-resume", 9)
 
     # 计划与专家结论随检查点恢复,断点续跑不需要重新规划
-    assert state["collab_plan"] == [{"agent": "tutor", "task": "解释概念"}]
+    assert state["collab_tasks"] == [{"agent": "tutor", "task": "解释概念"}]
     assert state["collab_results"][0]["tokens"] == 10
     assert state["run_id"] == 9
     # 非 AgentState 字段与运行时队列不进入恢复状态
@@ -576,7 +576,7 @@ def test_dependent_expert_receives_upstream_conclusions(monkeypatch):
     monkeypatch.setattr(collab_module, "_run_expert", fake_expert)
     _stub_settings(monkeypatch, timeout=5, retries=0)
 
-    state = _state(collab_plan=[
+    state = _state(collab_tasks=[
         {"agent": "tutor", "task": "解释概念"},
         {"agent": "review", "task": "分析错题", "depends_on": ["tutor"]},
     ])
@@ -607,7 +607,7 @@ def test_dependent_expert_still_runs_after_upstream_failure(monkeypatch):
     monkeypatch.setattr(collab_module, "_run_expert", fake_expert)
     _stub_settings(monkeypatch, timeout=5, retries=0)
 
-    state = _state(collab_plan=[
+    state = _state(collab_tasks=[
         {"agent": "tutor", "task": "解释概念"},
         {"agent": "review", "task": "分析错题", "depends_on": ["tutor"]},
     ])

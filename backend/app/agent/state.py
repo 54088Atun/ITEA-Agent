@@ -27,7 +27,7 @@ class AgentState(TypedDict):
 
     # === 多 Agent 协作 ===
     collaborate: bool              # 是否启用多 Agent 协作
-    collab_plan: List[Dict]        # 协作计划 [{"agent": "tutor", "task": "..."}]
+    collab_tasks: List[Dict]       # 协作计划 [{"agent": "tutor", "task": "..."}]
     collab_results: List[Dict]     # 各专家结论 [{"agent", "label", "task", "output", "status"}]
 
     # === 工具与检索 ===

@@ -257,7 +257,7 @@ def _initial_state(case: dict) -> dict:
         "task_plan": [],
         "current_step": 0,
         "collaborate": case["branch"] == "team",
-        "collab_plan": [],
+        "collab_tasks": [],
         "collab_results": [],
         "tool_calls": [],
         "tool_results": {},

@@ -327,7 +327,7 @@ def _build_initial_state(req: ChatRequest, user: User) -> AgentState:
         plan_revisions=[],
         pending_action=dict(_pending_actions.get(session_id) or {}),
         collaborate=bool(getattr(req, "collaborate", False)),
-        collab_plan=[],
+        collab_tasks=[],
         collab_results=[],
         tool_calls=[],
         tool_approvals=None,

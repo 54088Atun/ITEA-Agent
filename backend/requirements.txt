@@ -17,6 +17,7 @@ langgraph>=0.2.50
 langchain-core>=0.3.25
 langchain-community>=0.3.10
 langchain-openai>=0.2.10
+openai>=1.0
 
 # RAG
 faiss-cpu==1.9.0.post1

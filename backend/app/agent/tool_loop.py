@@ -21,13 +21,25 @@ MAX_TOOL_STEPS = 8
 TOOL_TIMEOUT_SECONDS = 20
 
 
-def _split_plan(plan) -> tuple[str, list[dict]]:
-    """统一模型决策的两种形态:纯文本 / ToolPlan"""
+def _split_plan(plan) -> tuple[str, list[dict], str]:
+    """统一模型决策的两种形态:纯文本 / ToolPlan
+
+    返回 (说明文字, 工具调用, reasoning_content)。
+    reasoning 必须随 assistant(tool_calls) 一起回灌,否则思考模式会 400。
+    """
     if isinstance(plan, ToolPlan):
-        return plan.content or "", list(plan.tool_calls or [])
+        return (
+            plan.content or "",
+            list(plan.tool_calls or []),
+            plan.reasoning or "",
+        )
     if isinstance(plan, dict):
-        return str(plan.get("content") or ""), list(plan.get("tool_calls") or [])
-    return ("" if plan is None else str(plan)), []
+        return (
+            str(plan.get("content") or ""),
+            list(plan.get("tool_calls") or []),
+            str(plan.get("reasoning") or ""),
+        )
+    return ("" if plan is None else str(plan)), [], ""
 
 
 async def _execute(call: dict, state, approval=None, quota=None) -> dict:
@@ -112,8 +124,12 @@ async def _emit_confirm(sink, state, item: dict, confirm_sent: set) -> None:
 
 async def _run_calls(calls: list[dict], history: list[dict], state,
                      trace: list[dict], approval=None, quota=None,
-                     sink=None, confirm_sent=None) -> None:
-    """批量执行一轮工具调用,按 assistant(tool_calls) + tool 消息回灌"""
+                     sink=None, confirm_sent=None, reasoning: str = "") -> None:
+    """批量执行一轮工具调用,按 assistant(tool_calls) + tool 消息回灌
+
+    reasoning: 模型本轮产生的 reasoning_content;思考模式下必须原样回灌,
+    预置的强制检索轮次没有模型思考内容,回传空串即可(服务端接受)。
+    """
     prepared: list[dict] = []
     for index, call in enumerate(calls):
         args = dict(call.get("arguments") or {})
@@ -127,6 +143,7 @@ async def _run_calls(calls: list[dict], history: list[dict], state,
         "role": "assistant",
         "content": "",
         "tool_calls": prepared,
+        "reasoning_content": reasoning or "",
     })
 
     for item in prepared:
@@ -188,12 +205,12 @@ async def run_tool_loop(
 
     for _ in range(max_steps):
         plan = await planner(history, tools)
-        content, calls = _split_plan(plan)
+        content, calls, reasoning = _split_plan(plan)
         if not calls:
             return content, trace
         await _run_calls(
             calls, history, state, trace, approval=approved, quota=quota,
-            sink=sink, confirm_sent=confirm_sent,
+            sink=sink, confirm_sent=confirm_sent, reasoning=reasoning,
         )
 
     logger.warning(

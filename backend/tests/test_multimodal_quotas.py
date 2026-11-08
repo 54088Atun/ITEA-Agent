@@ -129,6 +129,8 @@ def test_audio_feature_switch_off(db):
 
 
 def test_probe_duration_reads_wav(tmp_path):
+    # av 属 requirements-asr.txt 可选依赖,未安装时时长探测按 0 降级
+    pytest.importorskip("av")
     path = tmp_path / "one_second.wav"
     with wave.open(str(path), "wb") as handle:
         handle.setnchannels(1)

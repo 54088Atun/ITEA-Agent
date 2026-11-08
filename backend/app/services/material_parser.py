@@ -41,7 +41,7 @@ SUPPORTED_HINT = "PDF / DOCX / PPTX / XLSX / TXT / MD / CSV / 代码文件 / 图
 
 def safe_filename(filename: str) -> str:
     """去掉客户端可能携带的路径,防止目录穿越"""
-    return Path(filename or "upload").name
+    return Path((filename or "upload").replace("\\", "/")).name
 
 
 def validate_filename(filename: str) -> str:

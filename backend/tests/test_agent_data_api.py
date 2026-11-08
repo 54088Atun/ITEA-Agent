@@ -30,7 +30,7 @@ def _state(**overrides):
         "task_plan": [],
         "current_step": 0,
         "collaborate": False,
-        "collab_plan": [],
+        "collab_tasks": [],
         "collab_results": [],
         "tool_calls": [],
         "tool_results": {},

@@ -81,7 +81,7 @@ def route_by_branch(state: AgentState) -> str:
 
 def route_after_collab_plan(state: AgentState) -> str:
     """协作规划之后:有并行计划则执行专家,否则降级到单 Agent 业务节点"""
-    if state.get("collab_plan"):
+    if state.get("collab_tasks"):
         return "collab_execute"
     branch = state.get("branch", "tutor")
     return branch if branch in BUSINESS_NODES else "tutor"

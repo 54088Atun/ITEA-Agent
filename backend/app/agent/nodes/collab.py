@@ -214,7 +214,7 @@ async def collab_plan_node(state: AgentState) -> dict:
         await _notify(state, "collab_plan", {
             "source": "single", "plan": [], "branch": branch,
         })
-        return {"collab_plan": [], "collab_results": [], "branch": branch}
+        return {"collab_tasks": [], "collab_results": [], "branch": branch}
 
     # 模型不可用或输出无法解析:沿用确定性兜底,保证协作功能本身可用
     if plan is None:
@@ -227,7 +227,7 @@ async def collab_plan_node(state: AgentState) -> dict:
         "plan": [{"agent": p["agent"], "label": AGENT_LABELS.get(p["agent"], p["agent"]),
                   "task": p["task"]} for p in plan],
     })
-    return {"collab_plan": plan}
+    return {"collab_tasks": plan}
 
 
 def _render_expert_persona(agent: str, state: AgentState, user_input: str) -> str:
@@ -352,7 +352,7 @@ async def _execute_expert(agent: str, task: str, state: AgentState) -> dict:
 
 async def collab_execute_node(state: AgentState) -> dict:
     """并行执行各专家子任务,按计划顺序保留结论与单专家耗时"""
-    plan = state.get("collab_plan") or []
+    plan = state.get("collab_tasks") or []
     rag_context = fetch_course_context(
         _latest_user_input(state), state.get("course_id"),
         state["user_id"], state.get("user_role", "student"),

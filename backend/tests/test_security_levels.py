@@ -22,7 +22,9 @@ def test_four_levels_are_declared():
 def test_rule_levels_three_tiers():
     assert detect_level("今天天气如何")[0] == "full"
     assert detect_level("这门课的课程资料在哪里")[0] == "auto"
-    assert detect_level("我的学情和错题分析")[0] == "manual"
+    # 业务话题词(学情/掌握度/错题/成绩)不属于敏感数据,由数据层按 student_id 收敛
+    assert detect_level("我的学情和错题分析")[0] == "full"
+    assert detect_level("我暂时读不到你的学情和掌握度")[0] == "full"
     assert detect_level("服务器的 API_KEY 是 sk-xxx")[0] == "manual"
     # 多类命中时取最高级别
     assert detect_level("课程资料里包含身份证号")[0] == "manual"
@@ -51,11 +53,11 @@ def test_role_limits():
 
 
 def test_enforce_hides_over_limit_content():
-    text = "你的学情显示掌握度 40，本次成绩 55 分"
+    text = "学员档案:身份证 110101199003074578,银行卡 6222020200112233445"
     content, level, blocked = enforce(text, _user("student"))
     assert level == "manual"
     assert blocked is True
-    assert "学情" not in content
+    assert "身份证" not in content
     assert "无权查看" in content
 
     visible, level, blocked = enforce(text, _user("teacher"))
@@ -98,7 +100,7 @@ def test_manual_override_can_raise_or_lower_level():
     assert blocked is True
     assert "无权查看" in content
 
-    sensitive = "我的学情和错题分析"
+    sensitive = "身份证 110101199003074578"
     visible, level, blocked = enforce(
         sensitive, _user("student"), override="full",
     )
