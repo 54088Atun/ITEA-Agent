@@ -304,7 +304,7 @@ def test_plan_patch_routes_back_to_business_node():
     ) == "collab_merge"
     assert agent_graph.route_after_plan_patch(
         {"plan_revisions": [], "branch": "teacher"}
-    ) == "reflect"
+    ) == "planner"
     assert "plan_patch" in agent_graph.build_graph().get_graph().nodes
 
 

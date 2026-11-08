@@ -12,6 +12,10 @@ export const chatApi = {
   answer(requestId) {
     return http.get(`/chat/answer/${requestId}`)
   },
+  /** 确认执行高危工具(令牌由对话流下发) */
+  confirmTool(data) {
+    return http.post('/chat/confirm-tool', data)
+  },
   rename(sessionId, title) {
     return http.patch(`/chat/conversations/${sessionId}`, { title })
   },

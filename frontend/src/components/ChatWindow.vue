@@ -263,7 +263,7 @@
         :placeholder="placeholder"
         resize="none"
         :disabled="streaming || interviewExpired"
-        @keydown.enter.exact.prevent="send"
+        @keydown.enter.exact="onEnter"
         @paste="onPaste"
       />
       <div class="chat__composer-foot">
@@ -274,7 +274,7 @@
           >
             {{ interviewExpired ? '面试已结束' : `面试剩余 ${formatDuration(remainingSeconds)}` }}
           </span>
-          <label class="chat__collab" title="开启后由多个专家 Agent 分工协作并汇总回答">
+          <label v-if="canCollaborate" class="chat__collab" title="开启后由多个专家 Agent 分工协作并汇总回答">
             <el-switch v-model="collaborate" size="small" :disabled="streaming" />
             <span>多 Agent 协作</span>
           </label>
@@ -353,7 +353,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="timelineVisible" title="执行时间线" width="560px">
+    <el-dialog v-model="timelineVisible" title="执行时间线" width="min(560px, 92vw)">
       <div v-loading="timelineLoading" class="run-timeline">
         <p v-if="timelineRun" class="run-timeline__meta">
           {{ timelineRun.branch || '未知分支' }} · {{ timelineRun.status }}
@@ -371,10 +371,26 @@
             v-for="item in timelineItems" :key="item.seq"
             :class="['run-timeline__item', `is-${item.status}`]"
           >
-            <span class="run-timeline__seq">{{ item.seq }}</span>
-            <span class="run-timeline__kind">{{ item.kind_label }}</span>
-            <span class="run-timeline__name">{{ item.name }}</span>
-            <span class="run-timeline__cost">{{ item.duration_ms || 0 }} ms</span>
+            <button type="button" class="run-timeline__row" @click="toggleTimeline(item)">
+              <span class="run-timeline__seq">{{ item.seq }}</span>
+              <span class="run-timeline__kind">{{ item.kind_label }}</span>
+              <span class="run-timeline__name">{{ item.name }}</span>
+              <span class="run-timeline__cost">{{ item.duration_ms || 0 }} ms</span>
+            </button>
+            <div v-if="isTimelineOpen(item)" class="run-timeline__body">
+              <p v-if="item.error" class="run-timeline__error">{{ item.error }}</p>
+              <template v-if="item.payload !== null && item.payload !== undefined">
+                <p class="run-timeline__label">输入</p>
+                <pre class="run-timeline__pre">{{ formatSpanValue(item.payload) }}</pre>
+              </template>
+              <template v-if="item.result !== null && item.result !== undefined">
+                <p class="run-timeline__label">输出</p>
+                <pre class="run-timeline__pre">{{ formatSpanValue(item.result) }}</pre>
+              </template>
+              <p v-if="!item.payload && !item.result && !item.error" class="run-timeline__label">
+                该步骤无附加数据
+              </p>
+            </div>
           </li>
         </ul>
       </div>
@@ -475,9 +491,11 @@ const props = defineProps({
   interviewAssignmentId: { type: Number, default: null },
   /** 空态快捷提问 */
   suggestions: { type: Array, default: () => [] },
+  /** 错题复盘:true 表示本次消息作为错题提交并写入学情 */
+  reviewSubmit: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['time-update'])
+const emit = defineEmits(['time-update', 'sent'])
 
 const messages = ref([])
 const input = ref('')
@@ -500,6 +518,10 @@ const audioSource = ref('')
 const speakingIndex = ref(-1)
 const searchKeyword = ref('')
 const collaborate = ref(false)
+// 面试有计时/评分状态机、管理端有写操作确认,这两个入口不支持协作模式
+const canCollaborate = computed(
+  () => !props.branch || !['interview', 'admin'].includes(props.branch),
+)
 const summaryVisible = ref(false)
 const summaryText = ref('')
 const summarizing = ref(false)
@@ -521,6 +543,8 @@ const timelineLoading = ref(false)
 const timelineRun = ref(null)
 const timelineSummary = ref(null)
 const timelineItems = ref([])
+// 展开的步骤序号:时间线默认折叠,点开后展示参数/结果/错误
+const expandedTimeline = ref([])
 const memoryVisible = ref(false)
 const memoryLoading = ref(false)
 const memories = ref([])
@@ -1151,7 +1175,11 @@ async function openConversation(item) {
     const data = await chatApi.history(item.session_id)
     sessionId.value = item.session_id
     messages.value = (data.messages || []).map((m) => ({
-      role: m.role, content: m.content,
+      role: m.role,
+      content: m.content,
+      // 历史回填:run_id 恢复时间线/反馈入口,security_level 恢复信息级别徽标
+      ...(m.run_id ? { runId: m.run_id } : {}),
+      ...(m.security_level ? { securityLevel: m.security_level } : {}),
     }))
     input.value = ''
     pendingImages.value = []
@@ -1184,6 +1212,13 @@ async function removeConversation(item) {
     if (sessionId.value === item.session_id) newConversation()
     await loadConversations()
   } catch { /* 拦截器已提示 */ }
+}
+
+function onEnter(event) {
+  // 中文输入法组合态下回车用于上屏候选词,不触发发送
+  if (event?.isComposing || event?.keyCode === 229) return
+  event?.preventDefault?.()
+  send()
 }
 
 function send() {
@@ -1221,10 +1256,12 @@ function send() {
     collaborate: collaborate.value,
   }
   if (props.branch) body.branch = props.branch
+  if (props.reviewSubmit) body.review_submit = true
   if (props.interviewAssignmentId != null) {
     body.interview_assignment_id = props.interviewAssignmentId
   }
   runStream(props.endpoint, body)
+  emit('sent', body)
 }
 
 function agentLabel(agent) {
@@ -1251,6 +1288,7 @@ async function openTimeline(msg) {
   timelineRun.value = null
   timelineSummary.value = null
   timelineItems.value = []
+  expandedTimeline.value = []
   try {
     const data = await agentApi.timeline(msg.runId)
     timelineRun.value = data.run
@@ -1261,6 +1299,24 @@ async function openTimeline(msg) {
   } finally {
     timelineLoading.value = false
   }
+}
+
+function isTimelineOpen(item) {
+  return expandedTimeline.value.includes(item?.seq)
+}
+
+function toggleTimeline(item) {
+  if (!item || item.seq === undefined) return
+  const index = expandedTimeline.value.indexOf(item.seq)
+  if (index >= 0) expandedTimeline.value.splice(index, 1)
+  else expandedTimeline.value.push(item.seq)
+}
+
+/** 时间线明细只做可读化,单条截断防止超长 payload 撑爆弹窗 */
+function formatSpanValue(value) {
+  if (value === null || value === undefined) return ''
+  const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+  return text.length > 2000 ? `${text.slice(0, 2000)}…` : text
 }
 
 /** 对回答点赞/点踩,关联当前运行便于后续评估 */
@@ -1324,6 +1380,13 @@ async function openMemories() {
 
 async function removeMemory(id) {
   try {
+    await ElMessageBox.confirm(
+      '删除后该条长期记忆不可恢复，确认删除？', '提示', { type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  try {
     await agentApi.deleteMemory(id)
     memories.value = memories.value.filter((item) => item.id !== id)
     ElMessage.success('已删除该条记忆')
@@ -1332,25 +1395,23 @@ async function removeMemory(id) {
   }
 }
 
-/** 新增一条助手消息并挂载 SSE 流 */
+// 信息级别的文案与说明共用同一 key 集合,避免徽标有值而悬浮提示为空
+const SECURITY_META = {
+  full: { label: '完全审批', desc: '公开或低敏内容，直接输出' },
+  auto: { label: '自动审批', desc: '内部内容，规则校验后输出' },
+  manual: { label: '手动审批', desc: '敏感或机密内容，需授权角色查看' },
+  public: { label: '完全审批', desc: '公开内容，直接输出' },
+  internal: { label: '自动审批', desc: '内部内容，规则校验后输出' },
+  sensitive: { label: '手动审批', desc: '敏感内容，需授权角色查看' },
+  confidential: { label: '手动审批', desc: '机密内容，仅授权角色可查看' },
+}
+
 function securityLabel(level) {
-  return {
-    full: '完全审批',
-    auto: '自动审批',
-    manual: '手动审批',
-    public: '完全审批',
-    internal: '自动审批',
-    sensitive: '手动审批',
-    confidential: '手动审批',
-  }[level] || level
+  return SECURITY_META[level]?.label || level
 }
 
 function securityDesc(level) {
-  return {
-    full: '公开或低敏内容，直接输出',
-    auto: '内部内容，规则校验后输出',
-    manual: '敏感或机密内容，需授权角色查看',
-  }[level] || ''
+  return SECURITY_META[level]?.desc || ''
 }
 
 function riskLabel(level) {
@@ -1364,12 +1425,28 @@ async function confirmAction(msg) {
   card.loading = true
   card.error = ''
   try {
-    const data = await adminApi.executeAction({
-      action: card.action,
-      params: card.params,
-      confirmation_token: card.token,
-      idempotency_key: card.idempotencyKey,
-    })
+    let data
+    if (card.kind === 'tool') {
+      // 通用高危工具(如复习提醒):令牌绑定会话/参数,确认后才执行
+      if (!sessionId.value) {
+        card.status = 'error'
+        card.error = '会话尚未建立，请重新发起'
+        return
+      }
+      data = await chatApi.confirmTool({
+        session_id: sessionId.value,
+        tool: card.tool,
+        arguments: card.arguments || {},
+        token: card.token,
+      })
+    } else {
+      data = await adminApi.executeAction({
+        action: card.action,
+        params: card.params,
+        confirmation_token: card.token,
+        idempotency_key: card.idempotencyKey,
+      })
+    }
     if (data?.ok) {
       card.status = 'done'
       card.result = data.message || '已完成'
@@ -1589,6 +1666,9 @@ function attachStream(assistantMsg, url, body) {
       } else if (type === 'confirm_required') {
         // 批量/高危写动作:先展示影响范围,确认后才真正执行
         assistantMsg.confirm = {
+          kind: data.kind || '',
+          tool: data.tool || '',
+          arguments: data.arguments || {},
           action: data.action,
           params: data.params || {},
           label: data.label || '写操作',
@@ -1757,6 +1837,7 @@ function regenerate(msg) {
     course_id: props.courseId,
     collaborate: collaborate.value,
     ...(props.branch ? { branch: props.branch } : {}),
+    ...(props.reviewSubmit ? { review_submit: true } : {}),
     ...(props.interviewAssignmentId != null
       ? { interview_assignment_id: props.interviewAssignmentId } : {}),
   })
@@ -1771,6 +1852,7 @@ function lastBody() {
     course_id: props.courseId,
     collaborate: collaborate.value,
     ...(props.branch ? { branch: props.branch } : {}),
+    ...(props.reviewSubmit ? { review_submit: true } : {}),
     ...(props.interviewAssignmentId != null
       ? { interview_assignment_id: props.interviewAssignmentId } : {}),
   }
@@ -2604,18 +2686,51 @@ async function copy(text) {
   overflow-y: auto;
 }
 .run-timeline__item {
-  display: grid;
-  grid-template-columns: 28px 64px 1fr auto;
-  gap: 8px;
-  align-items: center;
-  padding: 8px 10px;
+  padding: 2px 0;
   border-bottom: 1px solid var(--el-border-color-lighter);
   font-size: 13px;
 }
+.run-timeline__row {
+  display: grid;
+  grid-template-columns: 24px minmax(56px, auto) 1fr 64px;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.run-timeline__row:hover { background: var(--el-fill-color-lighter); }
 .run-timeline__item.is-error { color: var(--el-color-danger); }
 .run-timeline__item.is-blocked { color: var(--el-color-warning); }
+.run-timeline__body {
+  padding: 4px 10px 10px 42px;
+  color: var(--el-text-color-regular);
+}
+.run-timeline__label {
+  margin: 6px 0 2px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.run-timeline__pre {
+  margin: 0;
+  padding: 8px;
+  max-height: 200px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--el-fill-color-lighter);
+  border-radius: 6px;
+}
 .run-timeline__seq { color: var(--el-text-color-placeholder); }
 .run-timeline__kind { color: var(--el-text-color-secondary); }
+.run-timeline__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-timeline__cost {
   font-size: 12px;
   color: var(--el-text-color-placeholder);
@@ -2641,10 +2756,8 @@ async function copy(text) {
   font-size: 12px;
   color: var(--el-text-color-secondary);
 }
-</style>
 
-<!-- 类 DeepSeek / 千问 / 豆包的对话界面:轻量侧栏、无气泡助手消息、大圆角输入区 -->
-<style scoped>
+/* 类 DeepSeek / 千问 / 豆包的对话界面:轻量侧栏、无气泡助手消息、大圆角输入区 */
 .chat-shell {
   gap: 0;
   overflow: hidden;

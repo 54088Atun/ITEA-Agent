@@ -18,6 +18,28 @@ _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _WORD_RE = re.compile(r"[a-zA-Z0-9_]{2,}")
 
 
+def render_plan(task_plan: list[dict], max_steps: int = 5) -> str:
+    """把任务计划渲染为提示词片段,让业务节点真正按计划取数"""
+    lines = []
+    for item in (task_plan or [])[:max_steps]:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        tool = str(item.get("tool") or "").strip()
+        line = f"{item.get('step', len(lines) + 1)}. {title}"
+        if tool:
+            line += f"(工具:{tool})"
+        lines.append(line)
+    if not lines:
+        return ""
+    return (
+        "\n\n【执行计划】按以下顺序取数与作答;步骤不适用时可跳过,"
+        "但不要跳过必要依据:\n" + "\n".join(lines)
+    )
+
+
 def budget(name: str, default: int) -> int:
     """读取上下文预算;关闭开关时返回近似无限,便于回退旧行为"""
     if not getattr(settings, "CONTEXT_BUDGET_ENABLED", True):

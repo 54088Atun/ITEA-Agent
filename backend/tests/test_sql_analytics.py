@@ -172,15 +172,12 @@ def _teacher_state(message):
 
 
 def test_teacher_node_injects_sql_result_table(monkeypatch):
+    """teacher 工具化后:模型调用 sql_query,结果表回灌给模型并计入来源"""
+    from app.agent.llm import ToolPlan
+    from app.agent.tools import TOOL_REGISTRY
+
     captured = {}
     called = {}
-
-    async def fake_llm(messages, sink=None, temperature=None):
-        system = messages[0]["content"]
-        if "只读 SQL 分析器" in system:
-            return "```sql\nSELECT class_name FROM v_classes\n```"
-        captured["system"] = system
-        return "分析完成"
 
     def fake_sql_query(**kwargs):
         called.update(kwargs)
@@ -191,26 +188,22 @@ def test_teacher_node_injects_sql_result_table(monkeypatch):
             "row_count": 1,
         }
 
+    calls = {"n": 0}
+
+    async def fake_llm(messages, sink=None, tools=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ToolPlan(tool_calls=[{
+                "id": "c1", "name": "sql_query",
+                "arguments": {"sql": "SELECT class_name FROM v_classes"},
+            }])
+        # 第二次调用可看到回灌的工具结果
+        captured["messages"] = messages
+        return "分析完成"
+
     monkeypatch.setattr(teacher_module, "llm_invoke", fake_llm)
-    monkeypatch.setattr(teacher_module, "sql_query", fake_sql_query)
-    monkeypatch.setattr(teacher_module, "fetch_course_evidence",
-                        lambda *a, **k: {"context": "", "fragments": []})
+    monkeypatch.setitem(TOOL_REGISTRY, "sql_query", fake_sql_query)
     monkeypatch.setattr(teacher_module, "fetch_syllabus", lambda *a, **k: "")
-    monkeypatch.setattr(teacher_module, "fetch_class_stats", lambda *a, **k: {})
-    monkeypatch.setattr(
-        teacher_module, "load_prompt",
-        lambda name: (
-            "只读 SQL 分析器 {views}" if name == "sql_query"
-            else "system {rag_context}"
-        ),
-    )
-
-    def fake_render(template, **kwargs):
-        for key, value in kwargs.items():
-            template = template.replace("{" + key + "}", str(value))
-        return template
-
-    monkeypatch.setattr(teacher_module, "render_prompt", fake_render)
 
     result = asyncio.run(teacher_module.teacher_node(
         _teacher_state("按班级统计近 4 周作业提交率"),
@@ -218,8 +211,9 @@ def test_teacher_node_injects_sql_result_table(monkeypatch):
 
     assert called["course_id"] == 10
     assert called["sql"] == "SELECT class_name FROM v_classes"
-    assert "SQL 查询结果" in captured["system"]
-    assert "| class_name |" in captured["system"]
-    assert "测试1班" in captured["system"]
+    tool_messages = [
+        item["content"] for item in captured["messages"] if item.get("role") == "tool"
+    ]
+    assert any("测试1班" in content for content in tool_messages)
     assert result["final_output"].startswith("分析完成")
     assert {"type": "data", "label": "SQL 分析结果"} in result["sources"]

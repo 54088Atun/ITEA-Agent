@@ -157,11 +157,11 @@ def test_allowed_tool_exception_behavior_is_unchanged(monkeypatch):
 
 @pytest.fixture()
 def tutor_stubs(monkeypatch):
-    """隔离 tutor 节点的外部依赖,只观察沙箱是否被调用"""
+    """隔离 tutor 节点的外部依赖,捕获送入模型的消息"""
     from app.agent.nodes import tutor
     from app.agent.tools import TOOL_REGISTRY
 
-    calls = []
+    captured = {}
     # P0-2:检索改由工具按需执行,测试中替换为固定返回,避免触达真实数据源
     monkeypatch.setitem(
         TOOL_REGISTRY, "course_evidence",
@@ -172,17 +172,20 @@ def tutor_stubs(monkeypatch):
     monkeypatch.setattr(tutor, "build_sources", lambda *a, **k: [])
 
     async def fake_llm(messages, sink=None, tools=None):
+        captured["messages"] = messages
         return "先想一想遍历的终止条件"
 
     monkeypatch.setattr(tutor, "llm_invoke", fake_llm)
-    monkeypatch.setattr(tutor, "code_executor",
-                        lambda **kw: calls.append(kw) or {"exit_code": 0})
-    return tutor, calls
+    return tutor, captured
 
 
-def test_tutor_does_not_run_host_sandbox_for_student(tutor_stubs):
-    """宿主机代码执行已关闭:学生提问包含代码块也不得触发沙箱"""
-    tutor, calls = tutor_stubs
+def _message_texts(captured):
+    return [str((item or {}).get("content") or "") for item in captured["messages"]]
+
+
+def test_tutor_does_not_execute_user_code(tutor_stubs):
+    """代码排错降级为静态分析:不得出现沙箱执行结果"""
+    tutor, captured = tutor_stubs
     state = {
         "user_role": "student", "course_id": 7, "user_id": 11,
         "messages": [{"role": "user", "content": "```python\nprint(1)\n```"}],
@@ -190,46 +193,58 @@ def test_tutor_does_not_run_host_sandbox_for_student(tutor_stubs):
 
     asyncio.run(tutor.tutor_node(state))
 
-    assert calls == [], "宿主机代码执行已关闭,仍执行了沙箱"
+    texts = _message_texts(captured)
+    assert any("系统不执行用户代码" in text for text in texts)
+    assert not any("沙箱执行结果" in text for text in texts)
 
 
-def test_tutor_skips_sandbox_when_role_lacks_tool(tutor_stubs):
-    """教师角色不在 code_executor 白名单内,节点直调必须被拦截"""
-    tutor, calls = tutor_stubs
+def test_tutor_code_hint_covers_javascript(tutor_stubs):
+    """语言识别不再丢弃 JS/TS,提示词按真实语言说明"""
+    tutor, captured = tutor_stubs
     state = {
-        "user_role": "teacher", "course_id": 7, "user_id": 11,
-        "messages": [{"role": "user", "content": "```python\nprint(1)\n```"}],
+        "user_role": "student", "course_id": 7, "user_id": 11,
+        "messages": [{"role": "user", "content": "```js\nconsole.log(1)\n```"}],
     }
 
     asyncio.run(tutor.tutor_node(state))
 
-    assert calls == [], "角色无权时仍执行了沙箱"
+    assert any("javascript" in text for text in _message_texts(captured))
 
 
 @pytest.fixture()
-def teacher_stubs(monkeypatch):
+def teacher_tool_stubs(monkeypatch):
     from app.agent.nodes import teacher
+    from app.agent.tools import TOOL_REGISTRY
 
     calls = []
-    monkeypatch.setattr(teacher, "fetch_course_evidence",
-                        lambda *a, **k: {"context": "", "fragments": []})
     monkeypatch.setattr(teacher, "fetch_syllabus", lambda *a, **k: "")
-    monkeypatch.setattr(teacher, "fetch_class_stats", lambda *a, **k: {})
-    monkeypatch.setattr(teacher, "load_prompt", lambda name: "system")
-    monkeypatch.setattr(teacher, "render_prompt", lambda template, **kw: "system")
     monkeypatch.setattr(teacher, "build_sources", lambda *a, **k: [])
-
-    async def fake_llm(messages, sink=None):
-        return "教案框架"
-
-    monkeypatch.setattr(teacher, "llm_invoke", fake_llm)
-    monkeypatch.setattr(teacher, "doc_generator",
-                        lambda **kw: calls.append(kw) or {"file_url": "/x", "file_name": "a"})
+    monkeypatch.setitem(
+        TOOL_REGISTRY, "doc_generator",
+        lambda **kw: calls.append(kw) or {"file_url": "/x", "file_name": "a"},
+    )
     return teacher, calls
 
 
-def test_teacher_generates_doc_for_teacher_role(teacher_stubs):
-    teacher, calls = teacher_stubs
+def test_teacher_generates_doc_for_teacher_role(teacher_tool_stubs, monkeypatch):
+    from app.agent.llm import ToolPlan
+
+    teacher, calls = teacher_tool_stubs
+    called = {"n": 0}
+
+    async def fake_llm(messages, sink=None, tools=None):
+        called["n"] += 1
+        if called["n"] == 1:
+            return ToolPlan(tool_calls=[{
+                "id": "c1", "name": "doc_generator",
+                "arguments": {
+                    "doc_type": "lesson_plan",
+                    "data": {"course_name": "测试课程"},
+                },
+            }])
+        return "教案框架"
+
+    monkeypatch.setattr(teacher, "llm_invoke", fake_llm)
     state = {
         "user_role": "teacher", "course_id": 7, "user_id": 11,
         "messages": [{"role": "user", "content": "导出教案"}],
@@ -240,8 +255,25 @@ def test_teacher_generates_doc_for_teacher_role(teacher_stubs):
     assert len(calls) == 1
 
 
-def test_teacher_skips_doc_when_role_lacks_tool(teacher_stubs):
-    teacher, calls = teacher_stubs
+def test_teacher_skips_doc_when_role_lacks_tool(teacher_tool_stubs, monkeypatch):
+    from app.agent.llm import ToolPlan
+
+    teacher, calls = teacher_tool_stubs
+    called = {"n": 0}
+
+    async def fake_llm(messages, sink=None, tools=None):
+        called["n"] += 1
+        if called["n"] == 1:
+            return ToolPlan(tool_calls=[{
+                "id": "c1", "name": "doc_generator",
+                "arguments": {
+                    "doc_type": "lesson_plan",
+                    "data": {"course_name": "测试课程"},
+                },
+            }])
+        return "教案框架"
+
+    monkeypatch.setattr(teacher, "llm_invoke", fake_llm)
     state = {
         "user_role": "student", "course_id": 7, "user_id": 11,
         "messages": [{"role": "user", "content": "导出教案"}],

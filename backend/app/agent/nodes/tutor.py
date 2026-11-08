@@ -4,22 +4,21 @@
 - 苏格拉底引导式答疑,不直接给答案
 - 按需调用 course_evidence / profile_query 取数(P0-2:不再无条件预取)
 - 支持流式输出(SSE)
-- 代码排错场景自动调 code_executor 沙箱
+- 代码排错仅基于用户粘贴的代码与报错做静态分析,不执行代码
 """
 import logging
 
 from app.agent.state import AgentState
-from app.agent.llm import llm_invoke
+from app.agent.llm import accepts_tools, llm_invoke
 from app.agent.prompts import load_prompt, render_prompt
-from app.agent.context import build_history, build_rag_context
+from app.agent.context import build_history, build_rag_context, render_plan
+from app.agent.data_api import fetch_memories
 from app.agent.sources import build_sources
-from app.agent.tools.code_executor import code_executor
 from app.agent.tool_loop import run_tool_loop
 from app.agent.nodes.tool_executor import tool_schemas_for_role
 
 logger = logging.getLogger(__name__)
 
-CODE_BLOCK_PATTERN = r"```(\w*)\n(.*?)```"
 MAX_HISTORY = 10
 
 # 寒暄与致谢不触发检索,避免打招呼也带一堆无关上下文
@@ -38,14 +37,16 @@ def _build_messages(state: AgentState, system_prompt: str) -> list[dict]:
 
 
 def _detect_code_submission(user_input: str) -> tuple[str, str] | None:
-    """检测用户是否提交了代码块,返回 (language, code) 或 None"""
+    """检测用户是否提交了代码块,返回 (language, code) 或 None
+
+    仅用于提示模型按代码排错规则作答,不触发任何执行。
+    """
     import re
-    match = re.search(CODE_BLOCK_PATTERN, user_input, re.DOTALL)
+    match = re.search(r"```(\w*)\n(.*?)```", user_input, re.DOTALL)
     if match and len(match.group(2).strip()) > 3:
         lang = match.group(1).lower() or "python"
-        lang = {"py": "python", "js": "javascript"}.get(lang, lang)
-        if lang in ("python", "java", "cpp", "c++"):
-            return ("cpp" if lang in ("c++",) else lang), match.group(2)
+        lang = {"py": "python", "js": "javascript", "ts": "typescript"}.get(lang, lang)
+        return lang, match.group(2)
     return None
 
 
@@ -57,6 +58,27 @@ def _is_small_talk(user_input: str) -> bool:
     if len(text) > SMALL_TALK_MAX_LEN:
         return False
     return any(word in text for word in SMALL_TALK_PATTERN)
+
+
+def _render_preferences(memories: dict) -> str:
+    """把语义偏好渲染成常驻提示词片段
+
+    模型未必每轮都调用 profile_query,而"以后都用中文解释"这类偏好必须
+    每轮生效,所以这里在 system prompt 中直接注入。
+    """
+    lines = []
+    for memo in (memories or {}).get("semantic_memories") or []:
+        if not isinstance(memo, dict):
+            continue
+        text = str(memo.get("summary") or memo.get("content") or "").strip()
+        if text:
+            lines.append(f"- {text[:120]}")
+    if not lines:
+        return ""
+    return (
+        "\n\n【长期偏好】用户此前明确要求长期遵守以下偏好,请直接沿用:\n"
+        + "\n".join(lines[:3])
+    )
 
 
 def _collect_evidence(trace: list[dict]) -> tuple[str, list[dict], bool]:
@@ -109,38 +131,32 @@ async def tutor_node(state: AgentState) -> dict:
             + reflection_notes
         )
 
+    # 长期偏好常驻:不依赖模型是否调用 profile_query
+    system_prompt += _render_preferences(
+        fetch_memories(state.get("user_id") or 0, course_id, user_role),
+    )
+    # 计划消费:把本轮规划注入提示词,避免"计划说检索、实际没检索"
+    system_prompt += render_plan(state.get("task_plan") or [])
+
     messages = _build_messages(state, system_prompt)
 
-    # 2. 代码排错场景:自动执行沙箱,结果注入对话
+    # 2. 代码排错:系统不执行用户代码,只提示模型基于粘贴内容做静态分析
     code_match = _detect_code_submission(user_input)
     if code_match:
-        lang, code = code_match
-        from app.services.capabilities import tool_denied_reason
-
-        denial = tool_denied_reason(state.get("user_role", "student"), "code_executor")
-        if denial:
-            logger.info("跳过沙箱执行: %s", denial)
-        else:
-            exec_result = code_executor(code=code, language=lang)
-            if exec_result.get("exit_code", 0) != 0 or exec_result.get("stderr"):
-                messages.append({
-                    "role": "system",
-                    "content": (
-                        f"学生提交了 {lang} 代码,沙箱执行结果:\n"
-                        f"stdout: {exec_result.get('stdout', '')}\n"
-                        f"stderr: {exec_result.get('stderr', '')}\n"
-                        f"exit_code: {exec_result.get('exit_code')}\n"
-                        "请基于报错信息做引导式排错,不要给出修复后的完整代码。"
-                    ),
-                })
-                logger.info(
-                    "tutor 检测到代码提交,沙箱结果已注入(exit_code=%s)",
-                    exec_result.get("exit_code"),
-                )
+        lang, _code = code_match
+        messages.append({
+            "role": "system",
+            "content": (
+                f"学生提交了 {lang} 代码片段。系统不执行用户代码,也不会返回真实运行时错误;"
+                "请基于代码与用户描述做静态分析,指出问题方向并给出排查步骤,"
+                "必要时请用户补充完整报错信息。"
+            ),
+        })
 
     # 3. 课程事实题保底检索一次:防止模型跳过检索直接编造课程内容
+    # 未选课程时不强制检索:course_evidence 的 course_id 必填,强调用必然被网关拒绝
     forced_call = None
-    if not _is_small_talk(user_input):
+    if course_id and not _is_small_talk(user_input):
         forced_call = {
             "id": "forced_course_evidence",
             "name": "course_evidence",
@@ -148,12 +164,11 @@ async def tutor_node(state: AgentState) -> dict:
         }
 
     async def planner(history: list[dict], tools: list[dict]):
-        """带工具决策;兼容未支持 tools 参数的自定义实现与测试替身"""
+        """带工具决策;仅当调用方确实接受 tools 时才传,避免用异常探测签名"""
         sink = state.get("stream_queue")
-        try:
+        if accepts_tools(llm_invoke):
             return await llm_invoke(history, tools=tools, sink=sink)
-        except TypeError:
-            return await llm_invoke(history, sink=sink)
+        return await llm_invoke(history, sink=sink)
 
     try:
         output, trace = await run_tool_loop(

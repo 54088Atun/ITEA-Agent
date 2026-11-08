@@ -463,7 +463,11 @@ def validate_tool_arguments(
 
 
 def tool_schemas(role: str) -> list[dict]:
-    """OpenAI/DeepSeek 风格的 function calling schema"""
+    """OpenAI/DeepSeek 风格的 function calling schema
+
+    注意:运行时的模型目录以 `nodes.tool_executor.tool_schemas_for_role` 为准,
+    本函数仅供外部集成与契约校验复用,两者都从 TOOL_SPECS + 角色能力矩阵生成。
+    """
     return [
         {
             "type": "function",

@@ -82,11 +82,15 @@ def test_security_eval_course_required_argument_rejected():
     ) is None
 
 
-def test_security_eval_empty_tool_calls_bypass_executor():
-    from app.agent.graph import route_after_business
+def test_security_eval_has_no_standalone_tool_executor_node():
+    """工具循环在业务节点内部完成,图里不再有不可达的独立执行节点"""
+    from app.agent import graph as agent_graph
 
-    assert route_after_business({"tool_calls": []}) == "plan_patch"
-    assert route_after_business({"tool_calls": [{"name": "rag_search"}]}) == "tool_executor"
+    built = agent_graph.build_graph().get_graph()
+    assert "tool_executor" not in built.nodes
+    edges = {(edge.source, edge.target) for edge in built.edges}
+    for node in ("teacher", "tutor", "review", "interview", "admin"):
+        assert (node, "plan_patch") in edges
 
 
 def test_live_mode_requires_api_key(monkeypatch):

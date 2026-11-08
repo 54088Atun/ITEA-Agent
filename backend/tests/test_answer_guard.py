@@ -142,6 +142,44 @@ def test_router_blocks_before_llm(monkeypatch):
     assert result["risk_target"] == "作业#100"
 
 
+def test_forced_branch_is_still_blocked_by_answer_guard(monkeypatch):
+    """A-01 回归:助教/备课/面试页面都带固定 branch,答案保护不得被旁路"""
+    async def fail_llm(*args, **kwargs):
+        raise AssertionError("命中答案保护时不应再调用模型风控")
+
+    monkeypatch.setattr(router_module, "check_answer_request", lambda *a, **k: {
+        "risk_type": "未截止作业答案保护", "kind": "作业", "id": 100,
+        "title": "第一次作业", "reason": "命中未截止作业题干",
+    })
+    monkeypatch.setattr(router_module, "llm_invoke", fail_llm)
+
+    result = asyncio.run(router_module.router_node({
+        "messages": [{"role": "user", "content": STEM}],
+        "user_id": 1, "user_role": "student", "course_id": 10,
+        "branch": "tutor", "intent": "chat",
+    }))
+
+    assert result["branch"] == "block"
+
+
+def test_forced_branch_is_still_checked_by_risk_gate(monkeypatch):
+    """A-01 回归:指定分支也必须先过模型风控"""
+    async def fake_risk(state, message):
+        return {"is_risky": True, "action": "intercept", "risk_type": "代写"}
+
+    monkeypatch.setattr(router_module, "check_answer_request", lambda *a, **k: None)
+    monkeypatch.setattr(router_module, "_risk_gate", fake_risk)
+
+    result = asyncio.run(router_module.router_node({
+        "messages": [{"role": "user", "content": "帮我写一份课程论文"}],
+        "user_id": 1, "user_role": "student", "course_id": 10,
+        "branch": "teacher", "intent": "chat",
+    }))
+
+    assert result["branch"] == "block"
+    assert result["risk_flag"] is True
+
+
 def test_risk_guard_guides_and_logs_target(monkeypatch):
     class _FakeSession:
         def __init__(self):

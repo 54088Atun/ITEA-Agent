@@ -53,6 +53,8 @@
         <el-option label="助教 tutor" value="tutor" />
         <el-option label="复盘 review" value="review" />
         <el-option label="面试 interview" value="interview" />
+        <el-option label="管理 admin" value="admin" />
+        <el-option label="协作 team" value="team" />
         <el-option label="风控 block" value="block" />
       </el-select>
       <el-button type="primary" @click="reloadRuns"><el-icon><Search /></el-icon> 查询</el-button>

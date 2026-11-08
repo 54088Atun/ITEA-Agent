@@ -205,11 +205,18 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "profile_query",
-        "description": "学情读取:需要个性化辅导、定位薄弱点时调用,返回压缩后的学情摘要",
+        "description": (
+            "学情读取:需要个性化辅导、定位薄弱点时调用,返回压缩后的学情摘要;"
+            "教师查看指定学生时需同时提供 student_id"
+        ),
         "parameters": {
             "type": "object",
             "properties": {
                 "course_id": {"type": "integer", "description": "课程 ID"},
+                "student_id": {
+                    "type": "integer",
+                    "description": "教师/管理员查看的学生 ID,学生本人无需填写",
+                },
             },
         },
     },
@@ -328,6 +335,15 @@ def _apply_scope_defaults(name: str, args: dict, state: AgentState,
     elif "user_id" in properties:
         if not _force("user_id", state_user):
             args.pop("user_id", None)
+
+    # 角色同样只认登录态:模型在 arguments 里塞 user_role 不能提权
+    state_role = state.get("user_role")
+    if "user_role" in signature:
+        if not _force("user_role", state_role):
+            args.pop("user_role", None)
+    elif "user_role" in properties:
+        if not _force("user_role", state_role):
+            args.pop("user_role", None)
 
 
 def _execute_single(call: dict, state: AgentState, approval=None,

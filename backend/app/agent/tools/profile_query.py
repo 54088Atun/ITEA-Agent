@@ -14,18 +14,22 @@ def profile_query(
     course_id: int | None = None,
     user_id: int | None = None,
     user_role: str = "student",
+    student_id: int | None = None,
 ) -> dict:
-    """读取当前学生学情,返回压缩摘要
+    """读取学情,返回压缩摘要
 
     Args:
         course_id: 课程 ID(由会话上下文强制收口)
         user_id: 用户 ID(由会话上下文强制收口)
         user_role: 调用者角色
+        student_id: 教师/管理员查看指定学生时填写;学生填了也无效
 
     Returns:
         {"summary": 压缩后的学情文本}
     """
-    profile = data_api.fetch_profile(user_id or 0, course_id, user_role)
+    profile = data_api.fetch_profile(
+        user_id or 0, course_id, user_role, student_id,
+    )
     if not profile:
         return {"summary": "(暂无学情数据)"}
     return {"summary": compress_profile(profile)}

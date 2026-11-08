@@ -13,6 +13,9 @@ VALID_INTENTS = {"prepare", "learn", "review", "interview", "violation", "chat"}
 # 显式触发多 Agent 协作的短语(与前端开关互补)
 COLLAB_HINTS = ("多agent协作", "多 agent 协作", "多智能体协作", "协作模式")
 
+# 不参与协作的入口:面试有计时/评分状态机,管理端有写操作确认流程
+COLLAB_EXCLUDED_BRANCHES = ("interview", "admin")
+
 
 def _parse_json(text: str) -> dict:
     """健壮解析 LLM 输出的 JSON(兼容 markdown 代码块包裹、前后多余文本)"""
@@ -56,22 +59,41 @@ def _parse_json(text: str) -> dict:
     raise json.JSONDecodeError("JSON 对象不完整", text, start)
 
 
+async def _risk_gate(state: AgentState, latest_msg: str) -> dict | None:
+    """模型风控闸门:命中返回风控结论,放行或不可用时返回 None
+
+    风控服务不可用时按放行处理(与 JSON 解析失败口径一致),避免模型抖动
+    导致所有对话被阻断;确定性答案保护已在调用本函数前独立执行。
+    """
+    try:
+        risk_resp = await llm_invoke([
+            {"role": "system", "content": load_prompt("risk_guard")},
+            {"role": "user", "content": f"用户身份:{state['user_role']}\n用户请求:{latest_msg}"},
+        ], temperature=0.0)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("前置风控调用失败,按放行处理: %s", exc)
+        return None
+    try:
+        risk = _parse_json(risk_resp)
+    except ValueError:
+        return None
+    if (
+        isinstance(risk, dict)
+        and risk.get("is_risky")
+        and risk.get("action") in ("intercept", "guide")
+    ):
+        return risk
+    return None
+
+
 async def router_node(state: AgentState) -> dict:
     """识别用户意图,确定业务分支。风控优先级最高。"""
-    # 指定分支(教案生成/面试实训等结构化入口)跳过意图识别,直接进入对应业务节点
-    forced_branch = state.get("branch")
-    if forced_branch:
-        return {
-            "risk_flag": False,
-            "risk_type": "",
-            "intent": state.get("intent") or "chat",
-            "branch": forced_branch,
-        }
-
     latest_msg = state["messages"][-1]["content"] if state["messages"] else ""
 
     # ---- 第一道:未截止作业/考试答案保护(AS-10,决策 12)----
-    # 确定性判定优先于模型风控:命中题干或显式索要答案即拦截转引导
+    # 确定性判定优先于模型风控:命中题干或显式索要答案即拦截转引导。
+    # 必须放在 forced branch 之前:助教/备课/面试/管理入口都带指定分支,
+    # 若先 return 会整体旁路答案保护与风控。
     guard = check_answer_request(
         state["user_id"], state["user_role"], latest_msg, state.get("course_id"),
     )
@@ -88,17 +110,8 @@ async def router_node(state: AgentState) -> dict:
         }
 
     # ---- 第二道:前置风控(优先级最高)----
-    risk_prompt = load_prompt("risk_guard")
-    risk_resp = await llm_invoke([
-        {"role": "system", "content": risk_prompt},
-        {"role": "user", "content": f"用户身份:{state['user_role']}\n用户请求:{latest_msg}"},
-    ], temperature=0.0)
-    try:
-        risk = _parse_json(risk_resp)
-    except json.JSONDecodeError:
-        risk = {"is_risky": False, "risk_type": "无", "action": "pass", "reason": "解析失败,默认放行"}
-
-    if risk.get("is_risky") and risk.get("action") in ("intercept", "guide"):
+    risk = await _risk_gate(state, latest_msg)
+    if risk:
         logger.warning("风控命中: type=%s, action=%s", risk.get("risk_type"), risk.get("action"))
         return {
             "risk_flag": True,
@@ -107,9 +120,16 @@ async def router_node(state: AgentState) -> dict:
             "branch": "block",
         }
 
-    # ---- 多 Agent 协作:显式开关或显式短语,跳过单分支意图识别 ----
-    if state.get("collaborate") or any(
+    # ---- 多 Agent 协作:显式开关或显式短语,优先于指定分支 ----
+    # 指定分支的页面(助教/备课)同样尊重协作开关;面试与管理端排除在外
+    forced_branch = state.get("branch")
+    wants_collab = bool(state.get("collaborate")) or any(
         hint in latest_msg.lower() for hint in COLLAB_HINTS
+    )
+    if (
+        wants_collab
+        and forced_branch not in COLLAB_EXCLUDED_BRANCHES
+        and not state.get("review_submit")
     ):
         logger.info("协作模式启用,进入 team 分支")
         return {
@@ -117,6 +137,15 @@ async def router_node(state: AgentState) -> dict:
             "risk_type": "",
             "intent": "chat",
             "branch": "team",
+        }
+
+    # ---- 指定分支(教案生成/面试实训等结构化入口):风控已通过,跳过意图识别 ----
+    if forced_branch:
+        return {
+            "risk_flag": False,
+            "risk_type": "",
+            "intent": state.get("intent") or "chat",
+            "branch": forced_branch,
         }
 
     # ---- 第二道:意图识别与分支路由 ----

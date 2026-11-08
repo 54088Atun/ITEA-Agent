@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     LLM_API_KEY: str = ""  # 必须从 .env 或环境变量注入,禁止硬编码
     LLM_MODEL: str = "deepseek-flash"  # 统一使用 flash,覆盖全部场景
     LLM_TEMPERATURE: float = 0.3
+    # 任务规划:开启后 planner 用一次低成本模型调用生成计划;
+    # 关闭时沿用静态模板,避免测试环境产生外部调用
+    PLANNER_LLM_ENABLED: bool = False
 
     # 图片识别:provider=openai 走多模态模型,provider=local_ocr 走本机 PP-OCRv5
     VISION_PROVIDER: str = "openai"

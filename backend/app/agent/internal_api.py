@@ -18,9 +18,15 @@ def _load_user(db, user_id: int) -> User | None:
 
 def fetch_profile_via_api(
     user_id: int, course_id: int | None, role: str = "student",
+    student_id: int | None = None,
 ) -> dict:
-    """复用学生端 API:进度、错题、复习计划、面试记录"""
-    if role != "student" or not course_id:
+    """复用学生端 API:进度、错题、复习计划、面试记录
+
+    - 学生:只能读取本人档案
+    - 教师/管理员:需显式传 `student_id`,且学生必须已加入该课程,
+      教师还需对课程有可见权限(课程归属或协作授权)
+    """
+    if not course_id:
         return {}
 
     db = SessionLocal()
@@ -36,12 +42,40 @@ def fetch_profile_via_api(
         if not user:
             return {}
 
-        progress = get_progress_by_path(course_id, user, db)
-        wrongs = list_wrong_questions(course_id=course_id, limit=5, student=user, db=db)
+        target_id = user_id
+        if role in ("teacher", "admin"):
+            if not student_id:
+                return {}
+            from app.models.classroom import CourseEnrollment
+            from app.models.course import Course
+            from app.services.course_access import can_view_course
+
+            course = db.query(Course).filter(Course.id == course_id).first()
+            if not course or not can_view_course(user, course, db):
+                logger.warning(
+                    "拒绝越课程读取学情: user=%s course=%s", user_id, course_id,
+                )
+                return {}
+            enrolled = db.query(CourseEnrollment).filter(
+                CourseEnrollment.course_id == course_id,
+                CourseEnrollment.student_id == student_id,
+            ).first()
+            if not enrolled:
+                return {}
+            target_id = student_id
+        elif role != "student":
+            return {}
+
+        student = _load_user(db, target_id)
+        if not student:
+            return {}
+
+        progress = get_progress_by_path(course_id, student, db)
+        wrongs = list_wrong_questions(course_id=course_id, limit=5, student=student, db=db)
         reviews = list_review_plans(
-            course_id=course_id, status="pending", student=user, db=db,
+            course_id=course_id, status="pending", student=student, db=db,
         )
-        records = list_interview_records(course_id=course_id, student=user, db=db)
+        records = list_interview_records(course_id=course_id, student=student, db=db)
 
         snapshot = {
             "overall_progress": float(progress.overall_progress or 0),

@@ -16,6 +16,7 @@ class AgentState(TypedDict):
     # === 任务规划 ===
     intent: str                    # 识别意图: prepare/learn/review/interview/violation/chat
     branch: str                    # 路由分支: teacher/tutor/review/interview/admin/team/block
+    review_submit: bool            # 复盘分支: true=提交错题并写入学情, false=查询/诊断
     task_plan: List[Dict]          # 拆解的子任务 [{"step": 1, "tool": "rag_search", "args": {...}}]
     current_step: int              # 当前执行步骤索引
     plan_status: str               # 计划状态: planned/replanned/skipped/exhausted

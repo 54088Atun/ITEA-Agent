@@ -295,8 +295,13 @@ def test_expired_pending_is_not_executed(monkeypatch):
     [
         ("确认", "confirm"),
         ("执行", "confirm"),
+        ("确认。", "confirm"),
         ("取消", "cancel"),
         ("算了", "cancel"),
+        # 反问句不得触发写操作:此前子串匹配会把"可以吗"当成确认
+        ("可以吗", ""),
+        ("这个可以吗？", ""),
+        ("不同意", ""),
         ("帮我看看还有哪些待审核课程", ""),
         ("", ""),
     ],

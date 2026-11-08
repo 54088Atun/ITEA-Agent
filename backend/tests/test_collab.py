@@ -177,6 +177,35 @@ def test_router_collaborate_flag_and_hint(monkeypatch):
     assert by_hint["branch"] == "team"
 
 
+def test_router_collaborate_respects_forced_branch(monkeypatch):
+    """A-02 回归:带固定 branch 的页面同样尊重协作开关,面试/管理端除外"""
+    async def fake_llm(messages, temperature=None, sink=None):
+        return '{"is_risky": false, "risk_type": "无", "action": "pass"}'
+
+    monkeypatch.setattr(router_module, "llm_invoke", fake_llm)
+
+    tutor = asyncio.run(router_module.router_node(
+        _state(branch="tutor", collaborate=True),
+    ))
+    assert tutor["branch"] == "team"
+
+    interview = asyncio.run(router_module.router_node(
+        _state(branch="interview", collaborate=True),
+    ))
+    assert interview["branch"] == "interview"
+
+    admin = asyncio.run(router_module.router_node(
+        _state(branch="admin", collaborate=True),
+    ))
+    assert admin["branch"] == "admin"
+
+    # 错题提交是写操作,不能被协作模式改道,否则不会写入学情
+    review = asyncio.run(router_module.router_node(
+        _state(branch="tutor", collaborate=True, review_submit=True),
+    ))
+    assert review["branch"] == "tutor"
+
+
 def test_stream_agent_response_emits_collab_events(monkeypatch):
     plan_json = json.dumps({
         "tasks": [

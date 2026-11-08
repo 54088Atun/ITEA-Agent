@@ -79,6 +79,7 @@ async def risk_guard_node(state: AgentState) -> dict:
     action = f"拦截转引导({target})" if target else "拦截转引导"
 
     # 记录风控日志(独立会话,避免影响主请求事务)
+    db = None
     try:
         db = SessionLocal()
         log = RiskLog(
@@ -89,9 +90,12 @@ async def risk_guard_node(state: AgentState) -> dict:
         )
         db.add(log)
         db.commit()
-        db.close()
     except Exception as e:
         logger.error("风控日志写入失败: %s", e)
+    finally:
+        # 会话必须在任何路径关闭:写入中途抛错时也不能泄漏连接
+        if db is not None:
+            db.close()
 
     return {
         "final_output": output,

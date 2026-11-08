@@ -19,6 +19,13 @@
         <el-button @click="joinVisible = true">
           <el-icon><UserFilled /></el-icon> 加入班级
         </el-button>
+        <el-checkbox
+          v-model="reviewSubmit"
+          :disabled="!courseId"
+          title="勾选后，发送的题目与解析会作为错题写入学情并安排复习"
+        >
+          记录为错题
+        </el-checkbox>
         <el-button @click="newSession">
           <el-icon><Plus /></el-icon> 新对话
         </el-button>
@@ -41,7 +48,9 @@
         placeholder="例如:二叉树的前序遍历和中序遍历有什么区别?或者贴上你的报错代码..."
         :course-id="courseId || null"
         branch="tutor"
+        :review-submit="reviewSubmit"
         :suggestions="suggestions"
+        @sent="reviewSubmit = false"
       />
     </div>
 
@@ -66,6 +75,8 @@ import { codeApi } from '../../api/codes'
 const courses = ref([])
 const courseId = ref(null)
 const sessionKey = ref(0)
+// 勾选后本次提问按错题提交处理(服务端强制走复盘分支并写入学情)
+const reviewSubmit = ref(false)
 
 const joinVisible = ref(false)
 const joining = ref(false)

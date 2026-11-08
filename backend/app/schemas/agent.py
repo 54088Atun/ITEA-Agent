@@ -12,6 +12,17 @@ class ChatRequest(BaseModel):
     collaborate: bool = False  # 多 Agent 协作模式
     request_id: Optional[str] = None  # 前端幂等键，用于断线续答/重试去重
     interview_assignment_id: Optional[int] = None  # 后续面试消息沿用同一作业时长约束
+    # 错题复盘:true=本次消息作为错题提交并写入学情与复习计划;false=只做诊断/查询
+    review_submit: bool = False
+
+
+class ToolConfirmRequest(BaseModel):
+    """高危工具确认执行请求:令牌绑定会话/用户/工具/参数"""
+
+    session_id: str
+    tool: str
+    arguments: Dict[str, Any] = {}
+    token: str
 
 
 class ChatEvent(BaseModel):

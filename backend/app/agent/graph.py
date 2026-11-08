@@ -4,8 +4,8 @@
 START → router(含前置风控)
   ├─ block → END(风控拦截直接输出引导话术)
   └─ prepare(课程可见性校验) → planner(输出带依赖的任务图)
-       → 业务节点(teacher/tutor/review/interview/admin)
-         → tool_executor → plan_patch(中转计划调整)
+       → 业务节点(teacher/tutor/review/interview/admin)(内部完成工具循环)
+         → plan_patch(中转计划调整)
            ├─ 有调整 → 带新约束回业务节点重跑
            └─ 无调整 → planner(仅在工具失败/证据不足时追加一次重规划)
                  ├─ planned/replanned → 业务节点
@@ -23,7 +23,6 @@ from app.agent.nodes import (
     risk_guard_node,
     reflect_node,
     memory_write_node,
-    tool_executor_node,
     plan_patch_node,
     planner_node,
     teacher_node,
@@ -88,11 +87,6 @@ def route_after_collab_plan(state: AgentState) -> str:
     return branch if branch in BUSINESS_NODES else "tutor"
 
 
-def route_after_business(state: AgentState) -> str:
-    """业务节点之后:有待执行工具调用才进入执行节点,否则直接进入计划调整"""
-    return "tool_executor" if state.get("tool_calls") else "plan_patch"
-
-
 def route_after_reflect(state: AgentState) -> str:
     """反思之后:通过→档案回写,未通过→回业务节点重写"""
     if state.get("reflection_passed", True):
@@ -105,9 +99,9 @@ def route_after_reflect(state: AgentState) -> str:
 
 
 def route_after_plan_patch(state: AgentState) -> str:
-    """计划调整之后:有生效调整→带新约束重跑作答;否则进入反思"""
+    """计划调整之后:有生效调整→带新约束重跑作答;否则交由 planner 判定重规划"""
     if not state.get("plan_revisions"):
-        return "reflect"
+        return "planner"
     if state.get("branch") == "team":
         return "collab_merge"
     return route_by_branch(state)
@@ -161,7 +155,6 @@ def build_graph(checkpointer=None):
     g.add_node("collab_plan", collab_plan_node)
     g.add_node("collab_execute", collab_execute_node)
     g.add_node("collab_merge", collab_merge_node)
-    g.add_node("tool_executor", tool_executor_node)
     g.add_node("plan_patch", plan_patch_node)
     g.add_node("reflect", reflect_node)
     g.add_node("memory_write", memory_write_node)
@@ -193,12 +186,9 @@ def build_graph(checkpointer=None):
         "reflect": "reflect",
     })
 
-    # 业务节点 → 有工具调用:执行 / 无调用:直接计划调整(不进入执行节点)
+    # 业务节点 → 计划调整(工具循环在各节点内部完成,不再经过独立执行节点)
     for n in BUSINESS_NODES:
-        g.add_conditional_edges(n, route_after_business, {
-            "tool_executor": "tool_executor",
-            "plan_patch": "plan_patch",
-        })
+        g.add_edge(n, "plan_patch")
 
     # 多 Agent 协作:规划 → (并行执行专家 | 降级单 Agent) → 汇总 → 统一校验
     g.add_conditional_edges("collab_plan", route_after_collab_plan, {
@@ -210,17 +200,11 @@ def build_graph(checkpointer=None):
         "admin": "admin",
     })
     g.add_edge("collab_execute", "collab_merge")
-    g.add_conditional_edges("collab_merge", route_after_business, {
-        "tool_executor": "tool_executor",
-        "plan_patch": "plan_patch",
-    })
-
-    # 工具执行 → 计划调整(用户在生成中途提交的约束在此生效)
-    g.add_edge("tool_executor", "plan_patch")
+    g.add_edge("collab_merge", "plan_patch")
 
     # 计划调整 → 有调整:带新约束重跑作答 / 无调整:交由 planner 判定是否重规划
     g.add_conditional_edges("plan_patch", route_after_plan_patch, {
-        "reflect": "planner",
+        "planner": "planner",
         "teacher": "teacher",
         "tutor": "tutor",
         "review": "review",

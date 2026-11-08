@@ -19,13 +19,54 @@ def _safe(name: str, fn, default):
         return default
 
 
-def fetch_profile(user_id: int, course_id: int | None, role: str = "student") -> dict:
-    """通过学生端内部 API 读取学情"""
-    return _safe(
+def _recall_memories(user_id: int, course_id: int) -> dict:
+    """跨会话记忆召回:情景记忆(近期事件)+ 语义偏好,供上下文压缩注入"""
+    from app.services import agent_memory as mem_svc
+
+    recalled: dict = {}
+    episodic = mem_svc.list_recent_episodic(
+        user_id, course_id, days=mem_svc.DEFAULT_RECALL_DAYS, limit=5,
+    )
+    if episodic:
+        recalled["episodic_memories"] = episodic
+    semantic = mem_svc.search_memory(
+        user_id, course_id, query="", memory_type="semantic", limit=3,
+    )
+    if semantic:
+        recalled["semantic_memories"] = semantic
+    return recalled
+
+
+def fetch_memories(
+    user_id: int, course_id: int | None, role: str = "student",
+) -> dict:
+    """读取跨会话记忆(情景 + 语义);非学生或无课程时返回空"""
+    if role != "student" or not course_id:
+        return {}
+    return _safe("memory_recall", lambda: _recall_memories(user_id, course_id), {})
+
+
+def fetch_profile(
+    user_id: int, course_id: int | None, role: str = "student",
+    student_id: int | None = None,
+) -> dict:
+    """通过学生端内部 API 读取学情,并并入跨会话记忆
+
+    student_id 仅教师/管理员使用:读取指定学生,归属校验在内部 API 完成。
+    """
+    profile = _safe(
         "profile_api",
-        lambda: internal_api.fetch_profile_via_api(user_id, course_id, role),
+        lambda: internal_api.fetch_profile_via_api(
+            user_id, course_id, role, student_id,
+        ),
         {},
     )
+    # 学情为空时不额外查记忆库:没有档案的调用方(如教师)不需要召回
+    if profile:
+        memories = fetch_memories(user_id, course_id, role)
+        if memories:
+            profile = {**profile, **memories}
+    return profile
 
 
 def fetch_course_evidence(

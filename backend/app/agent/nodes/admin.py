@@ -10,7 +10,7 @@ import logging
 import time
 import uuid
 
-from app.agent.llm import llm_invoke
+from app.agent.llm import accepts_tools, llm_invoke
 from app.agent.nodes.router import _parse_json
 from app.agent.nodes.tool_executor import tool_schemas_for_role
 from app.agent.prompts import load_prompt, render_prompt
@@ -27,9 +27,17 @@ logger = logging.getLogger(__name__)
 
 AI_TAG = "[AI 辅助参考,请管理员复核]"
 
-CONFIRM_WORDS = ("确认", "确定", "执行", "同意", "可以", "confirm", "yes", "ok")
-CANCEL_WORDS = ("取消", "不执行", "算了", "不要", "撤销", "cancel", "no")
+CONFIRM_WORDS = frozenset({
+    "确认", "确定", "执行", "同意", "confirm", "yes", "ok",
+    "确认执行", "同意执行", "确定执行",
+})
+CANCEL_WORDS = frozenset({
+    "取消", "不执行", "算了", "不要", "撤销", "cancel", "no",
+    "取消操作", "不用了",
+})
 INTENT_MAX_LEN = 8
+# 句末标点与空白在比对前剔除,避免"可以吗?"这类反问被误判
+_TRAILING_PUNCT = " \t\r\n。.!！?？~～,，、;；:："
 
 
 async def _emit(queue, event_type: str, data: dict) -> None:
@@ -111,13 +119,17 @@ def _preview_action(state: AgentState, decision: dict) -> dict:
 
 
 def _write_intent(text: str) -> str:
-    """识别短句确认/取消;长句按新任务处理,避免误触发"""
+    """识别短句确认/取消;长句按新任务处理,避免误触发
+
+    只接受完全匹配的确认词:此前用子串判定,「可以吗」会被当成确认并执行写操作。
+    """
     value = (text or "").strip().lower()
     if not value or len(value) > INTENT_MAX_LEN:
         return ""
-    if any(word in value for word in CANCEL_WORDS):
+    normalized = value.strip(_TRAILING_PUNCT)
+    if normalized in CANCEL_WORDS:
         return "cancel"
-    if any(word in value for word in CONFIRM_WORDS):
+    if normalized in CONFIRM_WORDS:
         return "confirm"
     return ""
 
@@ -264,12 +276,11 @@ async def admin_node(state: AgentState) -> dict:
         })
 
     async def planner(history: list[dict], tools: list[dict]):
-        """带工具决策;兼容未支持 tools 参数的自定义实现与测试替身"""
+        """带工具决策;仅当调用方确实接受 tools 时才传,避免用异常探测签名"""
         sink = state.get("stream_queue")
-        try:
+        if accepts_tools(llm_invoke):
             return await llm_invoke(history, tools=tools, sink=sink)
-        except TypeError:
-            return await llm_invoke(history, sink=sink)
+        return await llm_invoke(history, sink=sink)
 
     try:
         output, trace = await run_tool_loop(

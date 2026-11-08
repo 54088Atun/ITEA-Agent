@@ -128,14 +128,26 @@ def test_tutor_returns_course_and_profile_sources(monkeypatch):
 
 def test_teacher_marks_class_stats_source(monkeypatch):
     monkeypatch.setattr(teacher_module, "fetch_syllabus", lambda *a, **k: "课程大纲")
-    monkeypatch.setattr(
-        teacher_module, "fetch_course_evidence",
-        lambda *a, **k: {"context": RAG_CONTEXT, "fragments": []},
+    monkeypatch.setitem(
+        TOOL_REGISTRY, "course_evidence",
+        lambda **kw: {"context": RAG_CONTEXT, "fragments": []},
     )
-    monkeypatch.setattr(teacher_module, "fetch_class_stats",
-                        lambda *a, **k: {"weak_points": ["递归"]})
+    monkeypatch.setitem(
+        TOOL_REGISTRY, "stats_analyzer",
+        lambda **kw: {"weak_points": ["递归"]},
+    )
 
-    async def fake_llm(messages, sink=None):
+    calls = {"n": 0}
+
+    async def fake_llm(messages, sink=None, tools=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ToolPlan(tool_calls=[
+                {"id": "c1", "name": "course_evidence",
+                 "arguments": {"query": "二叉树", "course_id": 10}},
+                {"id": "c2", "name": "stats_analyzer",
+                 "arguments": {"course_id": 10, "metric": "weakness"}},
+            ])
         return "教学框架"
 
     monkeypatch.setattr(teacher_module, "llm_invoke", fake_llm)

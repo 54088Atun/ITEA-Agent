@@ -77,18 +77,14 @@ def test_tutor_uses_tools_instead_of_snapshot(monkeypatch):
     assert result["rag_context"] == "DIRECT-RAG"
 
 
-def test_teacher_uses_direct_data_api(monkeypatch):
+def test_teacher_uses_tool_loop(monkeypatch):
+    """A-05:teacher 与 tutor 一致,取数交给模型按需调用工具,不再靠关键词分支"""
     captured = {}
     monkeypatch.setattr(teacher_module, "fetch_syllabus", lambda *a, **k: "DIRECT-SYLLABUS")
-    monkeypatch.setattr(
-        teacher_module, "fetch_course_evidence",
-        lambda *a, **k: {"context": "DIRECT-RAG", "fragments": []},
-    )
-    monkeypatch.setattr(teacher_module, "fetch_class_stats",
-                        lambda *a, **k: {"weak_points": ["DIRECT-STATS"]})
 
-    async def fake_llm(messages, sink=None):
+    async def fake_llm(messages, sink=None, tools=None):
         captured["system"] = messages[0]["content"]
+        captured["tools"] = [tool["name"] for tool in (tools or [])]
         return "备课框架"
 
     monkeypatch.setattr(teacher_module, "llm_invoke", fake_llm)
@@ -101,10 +97,12 @@ def test_teacher_uses_direct_data_api(monkeypatch):
 
     system = captured["system"]
     assert "DIRECT-SYLLABUS" in system
-    assert "DIRECT-RAG" in system
-    assert "DIRECT-STATS" in system
     assert "SNAPSHOT-RAG" not in system
-    assert result["rag_context"] == "DIRECT-RAG"
+    # 检索、统计、SQL、导出工具全部暴露,由模型决定是否调用
+    assert {
+        "course_evidence", "stats_analyzer", "sql_query", "doc_generator",
+    } <= set(captured["tools"])
+    assert result["rag_context"] == ""
 
 
 def test_review_and_interview_use_direct_profile(monkeypatch):
@@ -175,9 +173,29 @@ def test_review_mastery_uses_real_baseline(monkeypatch, mastery, kp_name, delta,
         })
 
     monkeypatch.setattr(review_module, "llm_invoke", fake_llm)
-    result = asyncio.run(review_module.review_node(_state(branch="review")))
+    result = asyncio.run(review_module.review_node(
+        _state(branch="review", review_submit=True),
+    ))
 
     assert result["profile_updates"]["mastery_updates"][0]["mastery_level"] == pytest.approx(expected)
+
+
+def test_review_query_does_not_record_wrong_question(monkeypatch):
+    """A-08:未显式提交错题时只做诊断,不得把用户提问写进学情"""
+    monkeypatch.setattr(review_module, "fetch_profile", lambda *a, **k: {"mastery": []})
+    monkeypatch.setattr(
+        review_module, "fetch_course_evidence",
+        lambda *a, **k: {"context": "", "fragments": []},
+    )
+
+    async def fake_llm(messages, temperature=None, sink=None):
+        return "你目前的薄弱点是递归,建议先复习基础概念。"
+
+    monkeypatch.setattr(review_module, "llm_invoke", fake_llm)
+    result = asyncio.run(review_module.review_node(_state(branch="review")))
+
+    assert result["profile_updates"] == {}
+    assert "[AI 辅助参考" in result["final_output"]
 
 
 def test_collab_expert_uses_direct_data_api(monkeypatch):
@@ -209,6 +227,110 @@ def test_data_api_degrades_on_failure(monkeypatch):
     assert data_api.fetch_profile(1, 10) == {}
     assert data_api.fetch_course_context("q", 10, 1) == ""
     assert data_api.fetch_class_stats(10, 1) == {}
+
+
+def test_tutor_prompt_consumes_task_plan(monkeypatch):
+    """A-03:计划必须进入业务提示词,不能只用于展示"""
+    captured = {}
+    monkeypatch.setitem(
+        TOOL_REGISTRY, "course_evidence",
+        lambda **kw: {"context": "", "fragments": []},
+    )
+
+    async def fake_llm(messages, sink=None, tools=None):
+        captured["system"] = messages[0]["content"]
+        return "回答"
+
+    monkeypatch.setattr(tutor_module, "llm_invoke", fake_llm)
+    state = _state(task_plan=[{
+        "step": 1, "title": "先检索课程资料", "tool": "course_evidence",
+    }])
+    asyncio.run(tutor_module.tutor_node(state))
+
+    assert "执行计划" in captured["system"]
+    assert "先检索课程资料" in captured["system"]
+
+
+def test_fetch_profile_merges_recalled_memories(monkeypatch):
+    """A-06:学情读取必须并入跨会话情景记忆与语义偏好"""
+    from app.services import agent_memory as mem_svc
+
+    monkeypatch.setattr(
+        internal_api, "fetch_profile_via_api",
+        lambda *a, **k: {"overall_progress": 50.0},
+    )
+    monkeypatch.setattr(
+        mem_svc, "list_recent_episodic",
+        lambda *a, **k: [{"summary": "上次复习二叉树", "date": "2026-11-01"}],
+    )
+    monkeypatch.setattr(
+        mem_svc, "search_memory",
+        lambda *a, **k: [{"summary": "以后都用中文解释"}],
+    )
+
+    profile = data_api.fetch_profile(1, 10)
+
+    assert profile["overall_progress"] == 50.0
+    assert profile["episodic_memories"][0]["summary"] == "上次复习二叉树"
+    assert profile["semantic_memories"][0]["summary"] == "以后都用中文解释"
+
+
+def test_fetch_profile_skips_memory_without_profile(monkeypatch):
+    """没有学情档案时不额外查记忆库,避免教师等角色产生无效查询"""
+    from app.services import agent_memory as mem_svc
+
+    recalled = []
+    monkeypatch.setattr(internal_api, "fetch_profile_via_api", lambda *a, **k: {})
+    monkeypatch.setattr(
+        mem_svc, "list_recent_episodic",
+        lambda *a, **k: recalled.append("episodic") or [],
+    )
+    monkeypatch.setattr(
+        mem_svc, "search_memory",
+        lambda *a, **k: recalled.append("semantic") or [],
+    )
+
+    assert data_api.fetch_profile(1, 10) == {}
+    assert recalled == []
+
+
+def test_tutor_skips_forced_retrieval_without_course(monkeypatch):
+    """A-10:未选课程时不得发起 course_evidence 强制检索(必填 course_id 会失败)"""
+    called = []
+    monkeypatch.setitem(
+        TOOL_REGISTRY, "course_evidence",
+        lambda **kw: called.append(kw) or {"context": "", "fragments": []},
+    )
+
+    async def fake_llm(messages, sink=None, tools=None):
+        return "这是通用知识解释。"
+
+    monkeypatch.setattr(tutor_module, "llm_invoke", fake_llm)
+    asyncio.run(tutor_module.tutor_node(_state(course_id=None)))
+
+    assert called == []
+
+
+def test_tutor_injects_semantic_preferences(monkeypatch):
+    """A-06:模型未调用 profile_query 时,长期偏好也要常驻提示词"""
+    captured = {}
+    monkeypatch.setitem(
+        TOOL_REGISTRY, "course_evidence",
+        lambda **kw: {"context": "", "fragments": []},
+    )
+    monkeypatch.setattr(
+        tutor_module, "fetch_memories",
+        lambda *a, **k: {"semantic_memories": [{"summary": "以后都用中文解释"}]},
+    )
+
+    async def fake_llm(messages, sink=None, tools=None):
+        captured["system"] = messages[0]["content"]
+        return "好的。"
+
+    monkeypatch.setattr(tutor_module, "llm_invoke", fake_llm)
+    asyncio.run(tutor_module.tutor_node(_state()))
+
+    assert "以后都用中文解释" in captured["system"]
 
 
 class _FakeQuery:
@@ -260,6 +382,30 @@ def test_internal_api_reuses_student_route_functions(monkeypatch):
     assert snapshot["recent_wrong"][0]["error_type"] == "概念不清"
     assert snapshot["pending_reviews"][0]["next_review_at"] == "2026-11-01"
     assert snapshot["interview"]["latest_score"] == 80
+
+
+def test_teacher_reads_enrolled_student_profile(monkeypatch):
+    """A-11:教师必须显式指定学生,且学生需在该课程中;未指定时不得返回他人数据"""
+    from app.api import student as student_api
+    import app.services.course_access as course_access
+
+    monkeypatch.setattr(internal_api, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(
+        course_access, "can_view_course", lambda user, course, db: True,
+    )
+    monkeypatch.setattr(
+        student_api, "get_progress_by_path",
+        lambda *a, **k: SimpleNamespace(overall_progress=66.0, mastery=[]),
+    )
+    monkeypatch.setattr(student_api, "list_wrong_questions", lambda **k: [])
+    monkeypatch.setattr(student_api, "list_review_plans", lambda **k: [])
+    monkeypatch.setattr(student_api, "list_interview_records", lambda **k: [])
+
+    assert internal_api.fetch_profile_via_api(2, 10, "teacher") == {}
+
+    snapshot = internal_api.fetch_profile_via_api(2, 10, "teacher", student_id=3)
+
+    assert snapshot["overall_progress"] == 66.0
 
 
 def test_internal_api_reuses_course_search_endpoint(monkeypatch):

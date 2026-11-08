@@ -24,6 +24,45 @@ FORGETTING_INTERVALS = [1, 2, 4, 7, 15, 30]
 # 无历史掌握度记录时的默认基线
 DEFAULT_MASTERY = 0.5
 
+DIAGNOSE_SYSTEM = (
+    "你是错题复盘助手,当前为「复盘查询」模式。"
+    "请基于学情档案与课程资料,诊断用户当前的知识薄弱点并给出下一步复习建议;"
+    "不要声称已记录错题,不要输出 JSON,不要修改任何学情数据。"
+)
+
+
+async def _diagnose(state: AgentState, user_input: str, snapshot: str,
+                    rag_context: str, raw_context: str, sources: list) -> dict:
+    """复盘查询:只做诊断与建议,不写错题/掌握度/复习计划"""
+    system_prompt = f"{DIAGNOSE_SYSTEM}\n\n【学情档案】\n{snapshot}"
+    if rag_context:
+        system_prompt += f"\n\n【课程资料参考】\n{rag_context}"
+    reflection_notes = state.get("reflection_notes", "")
+    if reflection_notes:
+        system_prompt += (
+            "\n\n【反思校验意见】上一轮回答存在以下问题,请修正后重新回答:\n"
+            + reflection_notes
+        )
+    try:
+        output = await llm_invoke(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input},
+            ],
+            temperature=0.3,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.error("复盘查询 LLM 调用失败: %s", e)
+        output = "复盘服务暂时不可用,请稍后重试。"
+    if "[AI 辅助参考" not in output:
+        output += "\n\n[AI 辅助参考,请师生审核]"
+    return {
+        "final_output": output,
+        "profile_updates": {},
+        "rag_context": raw_context,
+        "sources": sources,
+    }
+
 
 def _mastery_baseline(profile: dict, kp_name: str) -> float:
     """从学情快照读取知识点基线掌握度,仅无历史记录时使用 0.5"""
@@ -64,6 +103,12 @@ async def review_node(state: AgentState) -> dict:
         fragments=evidence.get("fragments"), course_id=course_id,
     )
 
+    # 0. 未显式提交错题时按"查询/诊断"处理:不写错题,避免任意提问污染学情
+    if not state.get("review_submit"):
+        return await _diagnose(
+            state, user_input, snapshot_str, rag_context, raw_context, sources,
+        )
+
     template = load_prompt("review")
     system_prompt = render_prompt(
         template,
@@ -98,8 +143,11 @@ async def review_node(state: AgentState) -> dict:
             "sources": sources,
         }
 
-    # 3. 解析结构化 JSON
-    result = _parse_json(raw_output)
+    # 3. 解析结构化 JSON(解析失败按空结果处理,走下方原文兜底)
+    try:
+        result = _parse_json(raw_output)
+    except ValueError:
+        result = {}
     if not result or "error_analysis" not in result:
         # JSON 解析失败,直接输出原文(兜底)
         logger.warning("review JSON 解析失败,输出原文")

@@ -17,16 +17,17 @@ from app.db.session import get_db, SessionLocal
 from app.core.deps import get_current_user
 from app.core.log_sanitizer import safe_exception
 from app.models.user import User
-from app.models.log import InteractionLog
+from app.models.log import AgentRun, InteractionLog
 from app.models.conversation import Conversation, ChatMessage
 from app.models.course import Course
 from app.models.interview_assignment import InterviewAssignment
 from app.schemas.agent import (
     ChatRequest, ConversationFavorite, ConversationRename, ConversationSecurityLevel,
+    ToolConfirmRequest,
 )
 from app.agent.graph import get_graph
 from app.agent.checkpoint import graph_config, load_latest_state
-from app.agent.sources import append_sources_footer
+from app.agent.sources import FOOTER_MARK, append_sources_footer
 from app.agent.state import AgentState
 from app.services.conversation_summary import summarize_conversation
 from app.services.security_levels import (
@@ -35,6 +36,7 @@ from app.services.security_levels import (
 )
 from app.services.runtime_metrics import record_runtime_metric
 from app.services.prompt_guard import sanitize_untrusted
+from app.services.tool_approval import verify_tool_token
 from app.services.agent_runs import (
     start_run, finish_run, find_run_by_request, add_dead_letter,
     expire_plan_revisions,
@@ -63,6 +65,43 @@ _cancelled_run_ids: set[int] = set()
 MAX_HISTORY = 20  # 每次请求最多携带的历史轮数
 # 单次对话的总时长上限:超过则中断并返回提示,避免一次请求长期占用连接
 MAX_STREAM_SECONDS = 240
+# 进程内缓存上限:没有淘汰会让长跑进程内存随会话/请求数持续增长
+ANSWER_CACHE_TTL_SECONDS = 1800
+ANSWER_CACHE_MAX_ENTRIES = 2000
+SESSION_CACHE_MAX_ENTRIES = 500
+
+
+def _prune_answer_cache(now: Optional[datetime] = None) -> None:
+    """清理过期幂等答案,并在超容量时按更新时间淘汰最旧记录"""
+    now = now or datetime.utcnow()
+    ttl = timedelta(seconds=ANSWER_CACHE_TTL_SECONDS)
+    for key in [
+        key for key, value in _answers.items()
+        if now - (value.get("updated_at") or now) > ttl
+    ]:
+        _answers.pop(key, None)
+    overflow = len(_answers) - ANSWER_CACHE_MAX_ENTRIES
+    if overflow > 0:
+        oldest = sorted(
+            _answers.items(), key=lambda item: item[1].get("updated_at") or now,
+        )[:overflow]
+        for key, _ in oldest:
+            _answers.pop(key, None)
+
+
+def _prune_session_cache() -> None:
+    """会话内存缓存超容量时按最后活跃时间淘汰,避免无上限增长"""
+    overflow = len(_sessions) - SESSION_CACHE_MAX_ENTRIES
+    if overflow <= 0:
+        return
+    oldest = sorted(
+        _sessions,
+        key=lambda sid: (_session_owner.get(sid) or {}).get("updated_at") or datetime.min,
+    )[:overflow]
+    for sid in oldest:
+        _sessions.pop(sid, None)
+        _session_owner.pop(sid, None)
+
 
 SSE_HEADERS = {
     "Cache-Control": "no-cache",
@@ -184,6 +223,7 @@ def _cache_answer(request_id: Optional[str], user_id: int, session_id: str,
     """登记/更新幂等答案缓存;无 request_id 时为空操作"""
     if not request_id:
         return
+    _prune_answer_cache()
     _answers[request_id] = {
         "status": status, "user_id": user_id, "session_id": session_id,
         "content": content, "branch": branch,
@@ -263,6 +303,7 @@ def _build_initial_state(req: ChatRequest, user: User) -> AgentState:
         history = history[-(MAX_HISTORY * 2):]
     _sessions[session_id] = history
     _session_owner[session_id] = {"user_id": user.id, "updated_at": datetime.utcnow()}
+    _prune_session_cache()
 
     return AgentState(
         messages=history,
@@ -275,8 +316,13 @@ def _build_initial_state(req: ChatRequest, user: User) -> AgentState:
         interview_assignment_id=getattr(req, "interview_assignment_id", None),
         intent="",
         branch="",
+        review_submit=bool(getattr(req, "review_submit", False)),
         task_plan=[],
         current_step=0,
+        # 每轮重置:检查点会保留未显式给出的字段,不复位会让重规划与工具轨迹跨轮串用
+        plan_status="",
+        replan_count=0,
+        replan_reason="",
         run_id=None,
         plan_revisions=[],
         pending_action=dict(_pending_actions.get(session_id) or {}),
@@ -286,6 +332,8 @@ def _build_initial_state(req: ChatRequest, user: User) -> AgentState:
         tool_calls=[],
         tool_approvals=None,
         tool_results={},
+        # 工具轨迹只描述本轮,必须每轮清空,避免 planner 读到上一轮的失败/证据
+        tool_trace=[],
         rag_context="",
         sources=[],
         profile_snapshot={},
@@ -764,6 +812,10 @@ async def _stream_graph(state: AgentState, db: Session, user: User,
             elif kind == "collab_step":
                 if not disconnected:
                     yield _sse_event("collab_step", payload)
+            elif kind == "confirm_required":
+                # 高危工具确认卡片:携带令牌与参数,用户确认后走 /chat/confirm-tool
+                if not disconnected:
+                    yield _sse_event("confirm_required", payload)
             else:
                 if not disconnected:
                     yield payload
@@ -957,6 +1009,9 @@ async def stream_agent_response(
     request: 传入时用于检测客户端断开,断开即停止生成。
     """
     state = _build_initial_state(req, user)
+    # 显式提交错题时强制走复盘分支(风控/答案保护仍在 router 内先行执行)
+    if getattr(req, "review_submit", False):
+        force_branch = force_branch or "review"
     if force_branch:
         state["branch"] = force_branch
         state["intent"] = {
@@ -1433,12 +1488,93 @@ def get_history(
             .order_by(ChatMessage.id.asc())
             .all()
         )
+        # 回填答案元数据:run_id 供时间线/反馈入口,信息级别供徽标展示
+        run_map: dict[str, int] = {}
+        request_ids = [
+            r.request_id for r in rows
+            if r.role == "assistant" and r.request_id
+        ]
+        if request_ids:
+            runs = (
+                db.query(AgentRun.id, AgentRun.request_id)
+                .filter(
+                    AgentRun.user_id == user.id,
+                    AgentRun.session_id == session_id,
+                    AgentRun.request_id.in_(request_ids),
+                )
+                .order_by(AgentRun.id.desc())
+                .all()
+            )
+            for run_id, req_id in runs:
+                run_map.setdefault(req_id, run_id)
+
+        messages = []
+        for r in rows:
+            item = {"role": r.role, "content": r.content}
+            if r.role == "assistant":
+                if r.request_id and r.request_id in run_map:
+                    item["run_id"] = run_map[r.request_id]
+                # 来源页脚已写入正文,分级判定需先剔除页脚,避免"课程资料"等词抬高等级
+                body = (r.content or "").split(FOOTER_MARK)[0]
+                item["security_level"] = (
+                    normalize_level(conv.security_level) or detect_level(body)[0]
+                )
+            messages.append(item)
         return {
             "session_id": session_id,
             "title": conv.title,
-            "messages": [{"role": r.role, "content": r.content} for r in rows],
+            "messages": messages,
         }
     return {
         "session_id": session_id,
         "messages": _sessions.get(session_id, []),
     }
+
+
+@router.post("/confirm-tool")
+def confirm_tool(
+    req: ToolConfirmRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """执行用户确认过的高危工具
+
+    令牌绑定「会话 + 用户 + 工具 + 参数摘要」,模型与客户端都无法伪造;
+    因此这里只做令牌校验,不重复判断意图。
+    """
+    if not verify_tool_token(
+        req.token, req.session_id, user.id, req.tool, req.arguments,
+    ):
+        raise HTTPException(status_code=400, detail="确认令牌无效或已过期,请重新发起")
+    conv = db.query(Conversation).filter(
+        Conversation.session_id == req.session_id,
+        Conversation.user_id == user.id,
+        Conversation.deleted_at.is_(None),
+    ).first()
+    if not conv:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    from app.agent.nodes.tool_executor import _execute_single
+
+    state = {
+        "session_id": req.session_id,
+        "user_id": user.id,
+        "user_role": user.role,
+        "admin_level": user.admin_level,
+        "course_id": conv.course_id,
+        "request_id": None,
+        "interview_assignment_id": None,
+    }
+    result = _execute_single(
+        {"name": req.tool, "arguments": dict(req.arguments)},
+        state,
+        approval={"tools": [req.tool]},
+    )
+    ok = bool(result.get("ok"))
+    data = result.get("data")
+    message = ""
+    if isinstance(data, dict):
+        message = str(data.get("message") or "")
+    if not message:
+        message = str(result.get("error") or ("已执行" if ok else "执行失败"))
+    return {"ok": ok, "message": message}

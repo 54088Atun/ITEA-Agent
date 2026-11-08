@@ -4,6 +4,7 @@
 - API Key 仅从环境变量 / .env 读取,不硬编码、不打印日志
 - 启动时校验密钥非空,缺失则拒绝初始化
 """
+import inspect
 import logging
 from dataclasses import dataclass, field
 
@@ -18,8 +19,20 @@ _llm_instance: ChatOpenAI | None = None
 LLM_TIMEOUT_SECONDS = 90
 LLM_MAX_RETRIES = 1
 
-# 流式兜底:模型直接给出回答(未调工具)时,把完整文本切块推给前端,保留渐进渲染
-_STREAM_CHUNK_SIZE = 24
+
+def accepts_tools(fn) -> bool:
+    """判断调用方是否接受 tools 关键字
+
+    用于兼容只带 sink 的测试替身/旧实现。此前用 except TypeError 探测,
+    会把模型调用内部的真实类型错误误判为"签名不兼容"并静默降级。
+    """
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return True
+    return "tools" in params or any(
+        param.kind == param.VAR_KEYWORD for param in params.values()
+    )
 
 
 @dataclass
@@ -145,12 +158,19 @@ def _content_text(resp) -> str:
     return str(content or "")
 
 
-async def _emit_chunks(sink, text: str) -> None:
-    """把完整文本分块推给流式通道,避免前端等到整段结束才看到内容"""
-    if not text:
-        return
-    for start in range(0, len(text), _STREAM_CHUNK_SIZE):
-        await sink.put(("token", text[start:start + _STREAM_CHUNK_SIZE]))
+async def _stream_decision(bound_llm, lc_msgs, sink):
+    """流式执行模型决策:边生成边推送文本,返回合并后的完整响应
+
+    工具调用参数同样以分片形式下发,LangChain 的 AIMessageChunk 相加即可
+    还原出完整的 tool_calls,因此工具决策阶段也能做真流式,无需等整段生成。
+    """
+    merged = None
+    async for chunk in bound_llm.astream(lc_msgs):
+        merged = chunk if merged is None else merged + chunk
+        text = _content_text(chunk)
+        if text:
+            await sink.put(("token", text))
+    return merged
 
 
 async def llm_invoke(
@@ -169,14 +189,17 @@ async def llm_invoke(
     lc_msgs = _to_lc_messages(messages)
 
     if tools:
-        # 工具决策阶段不做 token 流式:需要完整响应才能拿到 tool_calls
-        resp = await llm.bind_tools(_to_openai_tools(tools)).ainvoke(lc_msgs)
+        # 工具决策同样走流式:模型直接作答时可逐字渲染,
+        # 需要调用工具时文本说明先推送,工具参数由分片合并还原
+        bound = llm.bind_tools(_to_openai_tools(tools))
+        if sink is not None:
+            resp = await _stream_decision(bound, lc_msgs, sink)
+        else:
+            resp = await bound.ainvoke(lc_msgs)
         calls = _extract_tool_calls(resp)
         content = _content_text(resp)
         if calls:
             return ToolPlan(content=content, tool_calls=calls)
-        if sink is not None:
-            await _emit_chunks(sink, content)
         return content
 
     if sink is not None:

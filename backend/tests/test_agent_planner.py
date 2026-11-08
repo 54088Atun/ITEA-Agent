@@ -13,18 +13,29 @@ import asyncio
 import pytest
 
 import app.agent.graph as agent_graph
-from app.agent.graph import route_after_business, route_after_planner
+from app.agent.graph import route_after_planner
 from app.agent.nodes.planner import MAX_PLAN_STEPS, planner_node
 
 
 BRANCHES = ["teacher", "tutor", "review", "interview", "admin", "team"]
 
+# 计划必须只包含调用者角色可用的工具,因此按分支给出真实发起角色
+ROLE_BY_BRANCH = {
+    "teacher": "teacher",
+    "tutor": "student",
+    "review": "student",
+    "interview": "student",
+    "admin": "admin",
+    "team": "student",
+}
 
-def _state(branch="tutor", question="统计近 4 周提交率", **extra):
+
+def _state(branch="tutor", question="统计近 4 周提交率", user_role=None, **extra):
     state = {
         "branch": branch,
         "user_id": 7,
         "course_id": 3,
+        "user_role": user_role or ROLE_BY_BRANCH.get(branch, "student"),
         "messages": [{"role": "user", "content": question}],
         "task_plan": [],
         "current_step": 0,
@@ -56,6 +67,59 @@ def test_unknown_branch_falls_back_to_tutor_plan():
     result = asyncio.run(planner_node(_state("block")))
 
     assert [item["tool"] for item in result["task_plan"]] == [
+        "course_evidence", "profile_query", "rag_search",
+    ]
+
+
+@pytest.mark.parametrize("branch", BRANCHES)
+def test_plan_never_lists_tools_denied_for_role(branch):
+    """A-03 回归:计划里出现调用者无权使用的工具会误导用户"""
+    from app.services.capabilities import tool_denied_reason
+
+    state = _state(branch)
+    plan = asyncio.run(planner_node(state))["task_plan"]
+
+    assert plan
+    for item in plan:
+        assert tool_denied_reason(state["user_role"], item["tool"]) is None, item["tool"]
+
+
+def test_llm_planner_uses_question_and_drops_denied_tool(monkeypatch):
+    """A-03:开启后由模型规划,越权工具被丢弃,检索参数自动补齐"""
+    import app.agent.llm as llm_module
+    from app.core.config import settings
+
+    async def fake_llm(messages, temperature=None, sink=None):
+        return (
+            '{"steps":['
+            '{"title":"检索课程资料","tool":"course_evidence","args":{}},'
+            '{"title":"分析班级学情","tool":"stats_analyzer","args":{}}'
+            ']}'
+        )
+
+    monkeypatch.setattr(llm_module, "llm_invoke", fake_llm)
+    monkeypatch.setattr(settings, "PLANNER_LLM_ENABLED", True)
+
+    plan = asyncio.run(planner_node(_state("tutor")))["task_plan"]
+
+    assert [item["tool"] for item in plan] == ["course_evidence"]
+    assert plan[0]["args"]["query"] == "统计近 4 周提交率"
+    assert plan[0]["args"]["course_id"] == 3
+
+
+def test_llm_planner_falls_back_to_template_on_failure(monkeypatch):
+    import app.agent.llm as llm_module
+    from app.core.config import settings
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("模型不可用")
+
+    monkeypatch.setattr(llm_module, "llm_invoke", boom)
+    monkeypatch.setattr(settings, "PLANNER_LLM_ENABLED", True)
+
+    plan = asyncio.run(planner_node(_state("tutor")))["task_plan"]
+
+    assert [item["tool"] for item in plan] == [
         "course_evidence", "profile_query", "rag_search",
     ]
 
@@ -132,7 +196,11 @@ def test_missing_evidence_triggers_replan():
 
     assert result["plan_status"] == "replanned"
     assert "证据" in result["replan_reason"]
-    assert result["task_plan"][-1]["tool"] == "course_evidence"
+    step = result["task_plan"][-1]
+    assert step["tool"] == "course_evidence"
+    # A-04 回归:重试步骤必须补齐检索必需参数,否则必然被网关拒绝
+    assert step["args"]["query"] == "统计近 4 周提交率"
+    assert step["args"]["course_id"] == 3
 
 
 def test_planner_registered_in_graph():
@@ -157,12 +225,6 @@ def test_route_after_planner_team_branch():
     assert route_after_planner({"branch": "team", "plan_status": "replanned"}) == "collab_merge"
 
 
-def test_route_after_business_by_tool_calls():
-    assert route_after_business({}) == "plan_patch"
-    assert route_after_business({"tool_calls": []}) == "plan_patch"
-    assert route_after_business({"tool_calls": [{"name": "rag_search"}]}) == "tool_executor"
-
-
 def _stub_graph(monkeypatch, tutor_result, calls):
     """把业务链路替换为轻量桩,用于验证图路由与节点实际调用次数"""
     planned = {"done": False}
@@ -185,15 +247,10 @@ def _stub_graph(monkeypatch, tutor_result, calls):
     monkeypatch.setattr(agent_graph, "planner_node", planner)
     monkeypatch.setattr(agent_graph, "tutor_node", lambda state: dict(tutor_result))
 
-    def executor(state):
-        calls["executor"] += 1
-        return {"tool_calls": []}
-
     def patch(state):
         calls["patch"] += 1
         return {"plan_revisions": []}
 
-    monkeypatch.setattr(agent_graph, "tool_executor_node", executor)
     monkeypatch.setattr(agent_graph, "plan_patch_node", patch)
     monkeypatch.setattr(agent_graph, "reflect_node", lambda state: {"reflection_passed": True})
     monkeypatch.setattr(agent_graph, "memory_write_node", lambda state: {})
@@ -221,19 +278,6 @@ def test_graph_bypasses_executor_when_no_tool_calls(monkeypatch):
     assert result["final_output"] == "保留的回答"
 
 
-def test_graph_executes_tools_when_calls_present(monkeypatch):
-    calls = {"executor": 0, "patch": 0}
-    graph = _stub_graph(
-        monkeypatch,
-        {"tool_calls": [{"name": "rag_search", "arguments": {"query": "等价类"}}]},
-        calls,
-    )
-
-    graph.invoke(_graph_input())
-
-    assert calls == {"executor": 1, "patch": 1}
-
-
 def test_graph_trace_shows_plan_consumed_once(monkeypatch):
     """运行轨迹证明:计划生成后被 plan_patch 消费一次,空工具分支不进入执行节点"""
     calls = {"executor": 0, "patch": 0}
@@ -258,12 +302,11 @@ def test_memory_load_node_is_not_advertised():
     assert "memory_load" not in agent_graph.build_graph().get_graph().nodes
 
 
-def test_graph_business_nodes_branch_on_tool_calls():
-    edges = {
-        (edge.source, edge.target)
-        for edge in agent_graph.build_graph().get_graph().edges
-        if edge.conditional
-    }
+def test_graph_has_no_unreachable_tool_executor_node():
+    """A-14:工具循环已内嵌在业务节点,图里不再保留不可达的执行节点"""
+    built = agent_graph.build_graph().get_graph()
+
+    assert "tool_executor" not in built.nodes
+    edges = {(edge.source, edge.target) for edge in built.edges}
     for node in ("teacher", "tutor", "review", "interview", "admin", "collab_merge"):
-        assert (node, "tool_executor") in edges
         assert (node, "plan_patch") in edges
