@@ -24,7 +24,31 @@
       <el-tab-pane label="基本信息" name="info">
         <div class="tab-body">
           <div class="panel">
-            <el-form :model="infoForm" label-position="top" class="info-form">
+            <div class="panel__head">
+              <span class="panel__title">课程信息</span>
+              <el-button
+                v-if="canEditInfo && !editingInfo"
+                type="primary" plain size="small" @click="startEditInfo"
+              >
+                <el-icon><EditPen /></el-icon> 修改
+              </el-button>
+            </div>
+
+            <el-descriptions v-if="!editingInfo" :column="descColumns" border size="small">
+              <el-descriptions-item label="课程名">{{ course?.name || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="课程代码">{{ course?.code || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="学期">{{ course?.semester || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="审核状态">
+                <el-tag :type="auditTag(course?.audit_status)" size="small" effect="light">
+                  {{ auditLabel(course?.audit_status) }}
+                </el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item label="课程简介 / 教学大纲" :span="descColumns">
+                <div class="syllabus-text">{{ course?.syllabus || '暂无简介' }}</div>
+              </el-descriptions-item>
+            </el-descriptions>
+
+            <el-form v-else :model="infoForm" label-position="top" class="info-form">
               <div class="info-grid">
                 <el-form-item label="课程名">
                   <el-input v-model="infoForm.name" maxlength="100" placeholder="如：数据结构" />
@@ -45,7 +69,10 @@
                 </el-tag>
                 <span class="info-hint">课程需平台审核通过后学生才可见</span>
               </el-form-item>
-              <el-button type="primary" :loading="savingInfo" @click="saveInfo">保存基本信息</el-button>
+              <div class="info-actions">
+                <el-button @click="cancelEditInfo">取消</el-button>
+                <el-button type="primary" :loading="savingInfo" @click="saveInfo">保存基本信息</el-button>
+              </div>
             </el-form>
           </div>
         </div>
@@ -155,6 +182,71 @@
               <template #empty>
                 <StateBlock state="empty" title="暂无教材资料" />
               </template>
+            </el-table>
+          </div>
+        </div>
+      </el-tab-pane>
+
+      <!-- 课程对应的作业与考试 -->
+      <el-tab-pane label="作业与考试" name="tasks">
+        <div class="tab-body">
+          <div class="panel">
+            <div class="panel__head">
+              <span class="panel__title">作业</span>
+              <span class="panel__hint">共 {{ courseAssignments.length }} 项</span>
+            </div>
+            <el-table :data="courseAssignments" size="small" empty-text="本课程暂无作业">
+              <el-table-column label="作业" min-width="220">
+                <template #default="{ row }">
+                  <el-button link type="primary" @click="openAssignmentDetail(row)">{{ row.title }}</el-button>
+                </template>
+              </el-table-column>
+              <el-table-column label="类型" width="90">
+                <template #default="{ row }">
+                  <el-tag size="small" effect="light" :type="row.kind === 'exam' ? 'danger' : ''">
+                    {{ row.kind === 'exam' ? '考试' : '作业' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="截止时间" width="160">
+                <template #default="{ row }">{{ formatTime(row.due_at) }}</template>
+              </el-table-column>
+              <el-table-column prop="submission_count" label="提交" width="80" />
+              <el-table-column prop="pending_count" label="待确认" width="90" />
+              <el-table-column label="状态" width="90">
+                <template #default="{ row }">
+                  <el-tag :type="taskStatusTag(row.status)" size="small" effect="light">
+                    {{ taskStatusLabel(row.status) }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+
+          <div class="panel">
+            <div class="panel__head">
+              <span class="panel__title">考试</span>
+              <span class="panel__hint">共 {{ courseExams.length }} 份</span>
+            </div>
+            <el-table :data="courseExams" size="small" empty-text="本课程暂无试卷">
+              <el-table-column label="试卷" min-width="220">
+                <template #default="{ row }">
+                  <el-button link type="primary" @click="openExamDetail(row)">{{ row.title }}</el-button>
+                </template>
+              </el-table-column>
+              <el-table-column prop="question_count" label="题数" width="80" />
+              <el-table-column prop="total_score" label="总分" width="80" />
+              <el-table-column prop="submission_count" label="提交" width="80" />
+              <el-table-column label="截止时间" width="160">
+                <template #default="{ row }">{{ formatTime(row.due_at) }}</template>
+              </el-table-column>
+              <el-table-column label="状态" width="90">
+                <template #default="{ row }">
+                  <el-tag :type="taskStatusTag(row.status)" size="small" effect="light">
+                    {{ taskStatusLabel(row.status) }}
+                  </el-tag>
+                </template>
+              </el-table-column>
             </el-table>
           </div>
         </div>
@@ -288,42 +380,12 @@
       <p class="share-hint">对方凭码复制为课程快照，只包含课程信息、知识点与资料元数据，不会带走本课程的学生、学情与作业数据。</p>
     </el-dialog>
 
-    <!-- 资料预览:PDF/图片直接渲染,其他文件展示解析文本 -->
-    <el-dialog
+    <!-- 资料预览:Office 文档由服务端转 PDF,版式与 Word/Excel/PPT 一致 -->
+    <MaterialPreviewDialog
       v-model="previewVisible"
-      :title="previewMaterial?.title || '资料预览'"
-      width="min(880px, 92vw)"
-      destroy-on-close
-    >
-      <div v-loading="previewLoading" class="preview-body">
-        <iframe
-          v-if="previewKind === 'pdf'"
-          :src="previewUrl"
-          class="preview-frame"
-          title="资料预览"
-        ></iframe>
-        <img
-          v-else-if="previewKind === 'image'"
-          :src="previewUrl"
-          class="preview-image"
-          alt="资料预览"
-        />
-        <template v-else>
-          <pre v-if="previewText" class="preview-text">{{ previewText }}</pre>
-          <StateBlock
-            v-else
-            state="empty"
-            title="暂无可展示的文本"
-            hint="该文件可能仍在解析中，可尝试新窗口打开原文"
-          />
-        </template>
-      </div>
-      <template #footer>
-        <span class="preview-hint">{{ previewFileName }}</span>
-        <el-button @click="previewVisible = false">关闭</el-button>
-        <el-button type="primary" @click="openInNewTab">新窗口打开</el-button>
-      </template>
-    </el-dialog>
+      :course-id="courseId"
+      :material="previewMaterial"
+    />
   </div>
 </template>
 
@@ -332,10 +394,13 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { courseApi } from '../../api/course'
+import { examApi } from '../../api/exams'
 import { teacherApi } from '../../api/teacher'
 import { features, loadFeatures } from '../../stores/features'
+import { useUserStore } from '../../stores/user'
 import SkeletonTable from '../../components/SkeletonTable.vue'
 import StateBlock from '../../components/StateBlock.vue'
+import MaterialPreviewDialog from '../../components/MaterialPreviewDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -347,6 +412,16 @@ const course = ref(null)
 const tab = ref('kp')
 const knowledgePoints = ref([])
 const materials = ref([])
+const assignments = ref([])
+const exams = ref([])
+const userStore = useUserStore()
+const editingInfo = ref(false)
+const descColumns = window.matchMedia('(max-width: 767px)').matches ? 1 : 2
+
+const canEditInfo = computed(() => {
+  if (!course.value) return false
+  return userStore.isAdmin || userStore.user?.id === course.value.teacher_id
+})
 
 // 知识点按 parent_id 构建层级,交由 el-tree 折叠展示
 const kpTree = computed(() => {
@@ -368,18 +443,16 @@ const kpTree = computed(() => {
 // 默认只展开顶层，下级保持折叠，深层知识点较多的课程更清爽
 const kpRootKeys = computed(() => kpTree.value.map((node) => node.id))
 
+const courseAssignments = computed(() =>
+  assignments.value.filter((item) => item.course_id === courseId),
+)
+const courseExams = computed(() =>
+  exams.value.filter((item) => item.course_id === courseId),
+)
+
 // ---------- 资料预览 ----------
 const previewVisible = ref(false)
-const previewLoading = ref(false)
 const previewMaterial = ref(null)
-const previewKind = ref('text')
-const previewUrl = ref('')
-const previewText = ref('')
-const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif']
-const previewFileName = computed(() => {
-  const path = previewMaterial.value?.file_path || ''
-  return path.split(/[\\/]/).pop() || ''
-})
 
 const kpDialog = ref(false)
 const kpLoading = ref(false)
@@ -446,8 +519,22 @@ async function load() {
     fillInfo(c)
     knowledgePoints.value = Array.isArray(kps) ? kps : []
     materials.value = Array.isArray(mats) ? mats : []
+    loadTasks()
   } catch { /* 拦截器已提示 */ } finally {
     loading.value = false
+  }
+}
+
+async function loadTasks() {
+  const [assignmentRes, examRes] = await Promise.allSettled([
+    teacherApi.assignments(),
+    examApi.exams(),
+  ])
+  if (assignmentRes.status === 'fulfilled') {
+    assignments.value = Array.isArray(assignmentRes.value) ? assignmentRes.value : []
+  }
+  if (examRes.status === 'fulfilled') {
+    exams.value = Array.isArray(examRes.value) ? examRes.value : []
   }
 }
 
@@ -468,6 +555,16 @@ function auditTag(s) {
   return { approved: 'success', pending: 'warning', rejected: 'danger' }[s] || 'info'
 }
 
+function startEditInfo() {
+  fillInfo(course.value)
+  editingInfo.value = true
+}
+
+function cancelEditInfo() {
+  fillInfo(course.value)
+  editingInfo.value = false
+}
+
 async function saveInfo() {
   if (!infoForm.name.trim()) return ElMessage.warning('请输入课程名')
   savingInfo.value = true
@@ -479,42 +576,16 @@ async function saveInfo() {
       syllabus: infoForm.syllabus.trim() || null,
     })
     ElMessage.success('课程信息已保存')
+    editingInfo.value = false
     await load()
   } catch { /* 拦截器已提示 */ } finally {
     savingInfo.value = false
   }
 }
 
-function materialExt(row) {
-  const path = row?.file_path || row?.title || ''
-  const match = String(path).match(/\.([a-z0-9]+)$/i)
-  return match ? match[1].toLowerCase() : ''
-}
-
-async function openPreview(row) {
+function openPreview(row) {
   previewMaterial.value = row
   previewVisible.value = true
-  previewLoading.value = true
-  previewText.value = ''
-  previewUrl.value = courseApi.materialPreviewUrl(courseId, row.id)
-  const ext = materialExt(row)
-  previewKind.value = ext === 'pdf' ? 'pdf' : IMAGE_EXTS.includes(ext) ? 'image' : 'text'
-  if (previewKind.value !== 'text') {
-    previewLoading.value = false
-    return
-  }
-  try {
-    const data = await courseApi.materialText(courseId, row.id)
-    previewText.value = data?.text || ''
-  } catch {
-    previewText.value = ''
-  } finally {
-    previewLoading.value = false
-  }
-}
-
-function openInNewTab() {
-  if (previewUrl.value) window.open(previewUrl.value, '_blank', 'noopener')
 }
 
 function typeLabel(t) {
@@ -528,6 +599,22 @@ function typeTag(t) {
 function formatTime(t) {
   if (!t) return '—'
   return String(t).replace('T', ' ').slice(0, 19)
+}
+
+function taskStatusLabel(status) {
+  return { draft: '草稿', published: '已发布', closed: '已关闭' }[status] || status
+}
+
+function taskStatusTag(status) {
+  return { draft: 'info', published: 'success', closed: 'warning' }[status] || 'info'
+}
+
+function openAssignmentDetail(row) {
+  router.push(`/teacher/assignments/${row.id}`)
+}
+
+function openExamDetail(row) {
+  router.push(`/teacher/exams/${row.id}`)
 }
 
 // ---------- 知识点草稿:上传 → 预览 → 选择性采纳 ----------
@@ -749,6 +836,9 @@ async function retryParse(row) {
   gap: 0 var(--sp-4);
 }
 .info-hint { margin-left: var(--sp-2); font-size: var(--fs-xs); color: var(--text-secondary); }
+.syllabus-text { white-space: pre-wrap; line-height: 1.8; color: var(--text-primary); }
+.info-actions { display: flex; justify-content: flex-end; gap: var(--sp-2); }
+.panel__hint { margin-left: auto; font-size: var(--fs-xs); color: var(--text-secondary); }
 .tip { font-size: var(--fs-xs); color: var(--text-secondary); }
 .draft__file {
   margin-bottom: var(--sp-2);
@@ -775,20 +865,4 @@ async function retryParse(row) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.preview-body { min-height: 240px; }
-.preview-frame { width: 100%; height: 68vh; border: 0; }
-.preview-image { display: block; max-width: 100%; margin: 0 auto; }
-.preview-text {
-  max-height: 62vh;
-  overflow: auto;
-  margin: 0;
-  padding: var(--sp-3);
-  background: var(--bg-subtle);
-  border-radius: var(--r-sm);
-  font-size: var(--fs-sm);
-  line-height: 1.7;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.preview-hint { margin-right: auto; font-size: var(--fs-xs); color: var(--text-secondary); }
 </style>

@@ -268,6 +268,35 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         roles=("teacher", "student", "admin"),
     ),
     ToolSpec(
+        name="workspace_overview",
+        description="读取当前用户全部课程/班级/作业/考试概览",
+        parameters={"type": "object", "properties": {}},
+        roles=("teacher", "student", "admin"),
+        read_only=True,
+        max_calls_per_turn=2,
+    ),
+    ToolSpec(
+        name="workspace_action",
+        description=(
+            "执行当前用户有权限的写操作:课程/班级/成员/作业/题目/试卷;"
+            "需人工确认后执行"
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "action": {"type": "string"},
+                "params": {"type": "object"},
+                "summary": {"type": "string"},
+            },
+            "required": ["action", "params", "summary"],
+        },
+        roles=("teacher", "student", "admin"),
+        read_only=False,
+        requires_confirmation=True,
+        max_calls_per_turn=2,
+        timeout_ms=30000,
+    ),
+    ToolSpec(
         name="admin.course_list",
         description="管理端课程查询:按审核状态/关键词列出课程,带素材数与知识点数",
         parameters={

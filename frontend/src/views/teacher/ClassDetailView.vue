@@ -81,8 +81,34 @@
         </el-tab-pane>
 
         <el-tab-pane :label="`成员（${members.length}）`" name="members">
+          <div class="filter-bar">
+            <el-input
+              v-model="memberKeyword"
+              clearable
+              placeholder="搜索姓名 / 邮箱 / ID"
+              style="max-width: 260px"
+            >
+              <template #prefix><el-icon><Search /></el-icon></template>
+            </el-input>
+            <template v-if="isHead">
+              <el-button type="primary" @click="openInvite">
+                <el-icon><Plus /></el-icon> 新增成员
+              </el-button>
+              <el-button :loading="importing" @click="triggerImport">批量导入</el-button>
+              <input
+                ref="importInput"
+                type="file"
+                accept=".csv,.xlsx"
+                hidden
+                @change="onImportFile"
+              />
+            </template>
+            <div class="filter-bar__spacer"></div>
+            <span class="filter-bar__count">{{ filteredMembers.length }} / {{ members.length }} 人</span>
+          </div>
+
           <div class="panel">
-            <el-table :data="members" v-loading="membersLoading">
+            <el-table :data="filteredMembers" v-loading="membersLoading">
               <el-table-column prop="name" label="姓名" min-width="110">
                 <template #default="{ row }">
                   <el-button link type="primary" @click="openMember(row)">{{ row.name }}</el-button>
@@ -112,13 +138,22 @@
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="90">
+              <el-table-column label="操作" :width="actionWidth">
                 <template #default="{ row }">
                   <el-button link type="primary" @click="openMember(row)">详情</el-button>
+                  <template v-if="isHead">
+                    <el-button link type="primary" @click="openRole(row)">编辑</el-button>
+                    <el-button link type="danger" @click="removeMember(row)">移出</el-button>
+                  </template>
+                  <el-button
+                    v-else-if="isTeacher && row.member_type === 'student'"
+                    link type="primary"
+                    @click="setRepresentative(row)"
+                  >设为课代表</el-button>
                 </template>
               </el-table-column>
               <template #empty>
-                <StateBlock state="empty" title="暂无成员" hint="可复制课程码发给学生加入班级" />
+                <StateBlock state="empty" title="没有匹配的成员" hint="可调整搜索关键词，或复制课程码邀请学生加入" />
               </template>
             </el-table>
           </div>
@@ -177,13 +212,64 @@
         </el-tab-pane>
       </el-tabs>
     </template>
+
+    <el-dialog v-model="inviteVisible" title="新增成员" width="min(480px, 92vw)">
+      <el-form label-width="88px">
+        <el-form-item label="邮箱 / ID">
+          <el-input v-model="inviteForm.keyword" placeholder="注册邮箱或用户 ID" />
+        </el-form-item>
+        <el-form-item label="角色">
+          <el-select v-model="inviteForm.role" style="width: 100%">
+            <el-option
+              v-for="item in inviteRoleOptions"
+              :key="item.value" :label="item.label" :value="item.value"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="头衔">
+          <el-input v-model="inviteForm.title" placeholder="如：班长 / 课代表（可选）" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="inviteVisible = false">取消</el-button>
+        <el-button type="primary" :loading="inviting" @click="submitInvite">添加</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="roleVisible" title="修改成员角色" width="min(480px, 92vw)">
+      <el-form label-width="88px">
+        <el-form-item label="成员">{{ roleForm.name }}</el-form-item>
+        <el-form-item label="角色">
+          <el-select v-model="roleForm.role" style="width: 100%">
+            <el-option
+              v-for="item in assignableRoles"
+              :key="item.value" :label="item.label" :value="item.value"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="头衔">
+          <el-input v-model="roleForm.title" placeholder="如：班长 / 课代表" />
+        </el-form-item>
+        <el-form-item v-if="roleForm.role === 'custom'" label="权限">
+          <el-checkbox-group v-model="roleForm.permissions" class="perm-group">
+            <el-checkbox v-for="p in permissionOptions" :key="p.key" :label="p.key">
+              {{ p.label }}
+            </el-checkbox>
+          </el-checkbox-group>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="roleVisible = false">取消</el-button>
+        <el-button type="primary" :loading="roleSaving" @click="saveRole">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, reactive, ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { classroomApi } from '../../api/classroom'
 import SkeletonTable from '../../components/SkeletonTable.vue'
 import StateBlock from '../../components/StateBlock.vue'
@@ -201,6 +287,33 @@ const members = ref([])
 const membersLoading = ref(false)
 const report = ref(null)
 const announcements = ref([])
+
+// 成员管理
+const memberKeyword = ref('')
+const inviteVisible = ref(false)
+const inviting = ref(false)
+const inviteForm = reactive({ keyword: '', role: 'student', title: '' })
+const roleVisible = ref(false)
+const roleSaving = ref(false)
+const roleForm = reactive({
+  studentId: null,
+  name: '',
+  memberType: 'student',
+  role: 'student',
+  title: '',
+  permissions: [],
+})
+const permissionOptions = ref([])
+const importInput = ref()
+const importing = ref(false)
+
+const INVITE_ROLE_OPTIONS = [
+  { value: 'student', label: '普通学生' },
+  { value: 'monitor', label: '班长' },
+  { value: 'representative', label: '课代表' },
+  { value: 'custom', label: '自定义' },
+  { value: 'teacher', label: '任课教师' },
+]
 
 const ROLE_LABELS = {
   head_teacher: '班主任',
@@ -224,7 +337,43 @@ const pendingExams = computed(() =>
   (report.value?.exams || []).reduce((sum, row) => sum + (row.pending_manual || 0), 0),
 )
 
-onMounted(load)
+const isHead = computed(() =>
+  ['head_teacher', 'admin'].includes(classroom.value?.my_role),
+)
+const isTeacher = computed(() => classroom.value?.my_role === 'teacher')
+
+const filteredMembers = computed(() => {
+  const text = memberKeyword.value.trim().toLowerCase()
+  if (!text) return members.value
+  return members.value.filter((row) =>
+    String(row.name || '').toLowerCase().includes(text)
+    || String(row.email || '').toLowerCase().includes(text)
+    || String(row.student_id).includes(text),
+  )
+})
+
+const actionWidth = computed(() => (isHead.value || isTeacher.value ? 200 : 80))
+
+const inviteRoleOptions = computed(() =>
+  INVITE_ROLE_OPTIONS.filter((item) => isHead.value || item.value !== 'teacher'),
+)
+
+const assignableRoles = computed(() => {
+  if (roleForm.memberType === 'teacher') {
+    return [{ value: 'teacher', label: '任课教师' }]
+  }
+  return [
+    { value: 'student', label: '普通学生' },
+    { value: 'monitor', label: '班长' },
+    { value: 'representative', label: '课代表' },
+    { value: 'custom', label: '自定义' },
+  ]
+})
+
+onMounted(() => {
+  load()
+  loadPermissions()
+})
 
 async function load() {
   error.value = false
@@ -282,6 +431,110 @@ async function copyCode() {
   }
 }
 
+async function loadPermissions() {
+  try {
+    const data = await classroomApi.permissions()
+    permissionOptions.value = data.permissions || []
+  } catch { /* 拦截器已提示 */ }
+}
+
+function openInvite() {
+  Object.assign(inviteForm, { keyword: '', role: 'student', title: '' })
+  inviteVisible.value = true
+}
+
+async function submitInvite() {
+  const keyword = inviteForm.keyword.trim()
+  if (!keyword) return ElMessage.warning('请输入邮箱或用户 ID')
+  inviting.value = true
+  try {
+    const payload = {
+      ...(/^\d+$/.test(keyword) ? { studentId: Number(keyword) } : { email: keyword }),
+      role: inviteForm.role,
+      title: inviteForm.title.trim() || undefined,
+    }
+    await classroomApi.invite(classId, payload)
+    ElMessage.success('成员已加入班级')
+    inviteVisible.value = false
+    await load()
+  } catch { /* 拦截器已提示 */ } finally {
+    inviting.value = false
+  }
+}
+
+function triggerImport() {
+  importInput.value?.click()
+}
+
+async function onImportFile(event) {
+  const file = event.target.files?.[0]
+  if (!file) return
+  importing.value = true
+  try {
+    const res = await classroomApi.importMembers(classId, file)
+    ElMessage.success(`导入完成：成功 ${res.imported}，跳过 ${res.skipped}，失败 ${res.failed}`)
+    const firstFail = (res.items || []).find((item) => item.status === 'failed')
+    if (firstFail) ElMessage.warning(`第 ${firstFail.row} 行：${firstFail.message}`)
+    await load()
+  } catch { /* 拦截器已提示 */ } finally {
+    importing.value = false
+    event.target.value = ''
+  }
+}
+
+function openRole(row) {
+  Object.assign(roleForm, {
+    studentId: row.student_id,
+    name: row.name,
+    memberType: row.member_type,
+    role: row.role,
+    title: row.title || '',
+    permissions: [...(row.permissions || [])],
+  })
+  roleVisible.value = true
+}
+
+async function saveRole() {
+  roleSaving.value = true
+  try {
+    await classroomApi.assignRole(classId, roleForm.studentId, {
+      role: roleForm.role,
+      title: roleForm.title.trim() || undefined,
+      permissions: roleForm.role === 'custom' ? roleForm.permissions : undefined,
+    })
+    ElMessage.success('成员角色已更新')
+    roleVisible.value = false
+    await loadAux()
+  } catch { /* 拦截器已提示 */ } finally {
+    roleSaving.value = false
+  }
+}
+
+async function removeMember(row) {
+  try {
+    await ElMessageBox.confirm(`确认将「${row.name}」移出班级？`, '移出成员', { type: 'warning' })
+  } catch { return }
+  try {
+    await classroomApi.removeMember(classId, row.student_id)
+    ElMessage.success('已移出班级')
+    await load()
+  } catch { /* 拦截器已提示 */ }
+}
+
+async function setRepresentative(row) {
+  const title = classroom.value?.course_name
+    ? `${classroom.value.course_name}课代表`
+    : '课代表'
+  try {
+    await classroomApi.assignRole(classId, row.student_id, {
+      role: 'representative',
+      title,
+    })
+    ElMessage.success(`已将「${row.name}」设为${title}`)
+    await loadAux()
+  } catch { /* 拦截器已提示 */ }
+}
+
 function openMember(row) {
   router.push(`/teacher/classes/${classId}/members/${row.student_id}`)
 }
@@ -332,4 +585,5 @@ function openExam(row) {
   color: var(--text-secondary);
 }
 .ann-item p { margin: 0; white-space: pre-wrap; line-height: 1.7; color: var(--text-primary); }
+.perm-group { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); }
 </style>

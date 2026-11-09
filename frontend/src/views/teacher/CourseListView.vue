@@ -452,7 +452,9 @@ async function confirmDuplicate() {
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
+  height: 240px;
   padding: var(--sp-5);
+  overflow: hidden;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
@@ -461,15 +463,33 @@ async function confirmDuplicate() {
   transition: box-shadow var(--dur) var(--ease), border-color var(--dur) var(--ease);
 }
 .course:hover { box-shadow: var(--shadow-sm); border-color: var(--brand-300); }
-.course__head { display: flex; align-items: center; gap: var(--sp-3); }
+.course__head { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; }
 .course__seal {
   display: inline-flex; align-items: center; justify-content: center;
   width: 34px; height: 34px; flex-shrink: 0;
   border: 1px solid var(--brand-300); border-radius: var(--r-sm);
   color: var(--color-primary); background: var(--color-primary-wash);
 }
-.course__title { font-family: var(--font-serif); font-size: var(--fs-md); font-weight: 600; color: var(--text-primary); }
-.course__desc { flex: 1; min-height: 42px; margin: 0; font-size: var(--fs-sm); line-height: var(--lh-base); color: var(--text-secondary); }
+.course__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-serif); font-size: var(--fs-md); font-weight: 600; color: var(--text-primary);
+}
+.course__desc {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-base);
+  color: var(--text-secondary);
+}
 .course__foot { display: flex; align-items: center; justify-content: space-between; padding-top: var(--sp-3); border-top: 1px dashed var(--border); }
 .course__tags { display: inline-flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .course__actions { display: inline-flex; align-items: center; justify-content: flex-end; gap: var(--sp-2); flex-wrap: wrap; }

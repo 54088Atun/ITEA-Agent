@@ -37,14 +37,14 @@
         <div class="empty-state">
           <span>你还没有加入该课程</span>
           <el-button type="primary" @click="router.push('/student/tutor')">
-            <el-icon><Plus /></el-icon> 去课程助教加入班级
+            <el-icon><Plus /></el-icon> 去智能助手加入班级
           </el-button>
         </div>
       </div>
 
       <template v-else>
         <div v-if="!progress" class="panel">
-          <div class="empty-state">暂无学情数据，去课程助教聊几句吧</div>
+          <div class="empty-state">暂无学情数据，去智能助手聊几句吧</div>
         </div>
 
         <template v-if="progress">

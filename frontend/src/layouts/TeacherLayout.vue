@@ -26,7 +26,7 @@
       </el-menu-item>
       <el-menu-item index="/teacher/chat">
         <el-icon><ChatDotRound /></el-icon>
-        <span>备课助手</span>
+        <span>智能助手</span>
       </el-menu-item>
       <el-menu-item index="/teacher/report">
         <el-icon><DataAnalysis /></el-icon>

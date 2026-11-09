@@ -1734,7 +1734,7 @@ function attachStream(assistantMsg, url, body) {
         assistantMsg.runId = data.run_id
       } else if (type === 'branch') {
         const labels = {
-          teacher: '备课模式', tutor: '课程助教', review: '错题复盘',
+          teacher: '教师助手', tutor: '学生助手', review: '错题复盘',
           interview: '面试实训', admin: '管理助手', block: '风控拦截',
           team: '多 Agent 协作',
         }

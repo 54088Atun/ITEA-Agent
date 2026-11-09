@@ -6,7 +6,7 @@ ROLE_CAPABILITIES = {
     "student": {
         "tools": [
             "rag_search", "course_evidence", "profile_query",
-            "reminder_scheduler",
+            "reminder_scheduler", "workspace_overview", "workspace_action",
         ],
         "agents": ROLE_ALLOWED_AGENTS["student"],
         "course_data_scope": "enrolled_approved_courses",
@@ -16,6 +16,7 @@ ROLE_CAPABILITIES = {
             "rag_search", "course_evidence", "profile_query",
             "doc_generator", "stats_analyzer", "sql_query",
             "reminder_scheduler", "web.search", "web.fetch",
+            "workspace_overview", "workspace_action",
         ],
         "agents": ROLE_ALLOWED_AGENTS["teacher"],
         "course_data_scope": "owned_courses",
@@ -28,6 +29,7 @@ ROLE_CAPABILITIES = {
             "admin.course_list", "admin.material_stats", "admin.user_lookup",
             "admin.risk_summary", "admin.config_get",
             "web.search", "web.fetch",
+            "workspace_overview", "workspace_action",
             "project.search_code", "project.read_file", "project.git_diff",
             "project.search_logs", "project.run_tests", "project.db_schema",
         ],

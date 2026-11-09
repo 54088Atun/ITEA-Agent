@@ -50,6 +50,8 @@ const routes = [
     children: [
       { path: '', redirect: '/student/tutor' },
       { path: 'tutor', name: 'student-tutor', component: () => import('../views/student/TutorView.vue') },
+      { path: 'classes', name: 'student-classes', component: () => import('../views/student/ClassesView.vue') },
+      { path: 'courseware', name: 'student-courseware', component: () => import('../views/student/CoursewareView.vue') },
       { path: 'assignments', name: 'student-assignments', component: () => import('../views/student/AssignmentsView.vue') },
       { path: 'exams', name: 'student-exams', component: () => import('../views/student/ExamsView.vue') },
       { path: 'wrong', name: 'student-wrong', component: () => import('../views/student/WrongView.vue') },

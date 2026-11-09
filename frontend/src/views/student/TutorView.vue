@@ -2,8 +2,8 @@
   <div class="page page--fill">
     <div class="page-head">
       <div class="page-head__main">
-        <h2 class="page-title">课程助教</h2>
-        <p class="page-sub">引导式答疑 —— 不选课程也可以问通用知识，选择课程后会结合该课程资料与你的学情</p>
+        <h2 class="page-title">智能助手</h2>
+        <p class="page-sub">课程学习、班级事务、作业考试，都可以直接问我；选择课程后会结合该课程资料与你的学情</p>
       </div>
       <div class="page-head__actions">
         <el-select
@@ -44,7 +44,7 @@
     <div class="chat-container">
       <ChatWindow
         :key="sessionKey"
-        welcome="你好!我是你的课程助教。可以选择课程后结合课程资料提问，也可以直接问课堂以外的知识。"
+        welcome="你好!我是你的智能助手。可以问我学习问题，也可以查询班级、作业和考试，还能帮你提交作业。"
         placeholder="例如:二叉树的前序遍历和中序遍历有什么区别?或者贴上你的报错代码..."
         :course-id="courseId || null"
         branch="tutor"
@@ -83,9 +83,9 @@ const joining = ref(false)
 const inviteCode = ref('')
 
 const suggestions = [
-  '帮我梳理这门课的知识框架',
-  '这道题我卡住了，能给我一点提示吗',
-  '解释一下这段代码报错的原因',
+  '我有哪些作业还没提交?',
+  '帮我看看这周有哪些考试',
+  '这个班里有我的课代表吗',
 ]
 
 onMounted(loadCourses)

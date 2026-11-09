@@ -10,7 +10,15 @@
     <template #nav>
       <el-menu-item index="/student/tutor">
         <el-icon><ChatDotRound /></el-icon>
-        <span>课程助教</span>
+        <span>智能助手</span>
+      </el-menu-item>
+      <el-menu-item index="/student/classes">
+        <el-icon><School /></el-icon>
+        <span>我的班级</span>
+      </el-menu-item>
+      <el-menu-item index="/student/courseware">
+        <el-icon><FolderOpened /></el-icon>
+        <span>课程资料</span>
       </el-menu-item>
       <el-menu-item v-if="features.feature_assignments" index="/student/assignments">
         <el-icon><EditPen /></el-icon>

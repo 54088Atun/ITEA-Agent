@@ -28,6 +28,10 @@ export const classroomApi = {
   members(id) {
     return http.get(`/classes/${id}/members`)
   },
+  /** 班级成员查找:学生也可用,只返回公开字段 */
+  searchMembers(id, keyword) {
+    return http.get(`/classes/${id}/members/search`, { params: { keyword } })
+  },
   /** 班级角色与可配置权限清单 */
   permissions() {
     return http.get('/classes/permissions')

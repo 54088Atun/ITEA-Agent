@@ -1,6 +1,11 @@
 """课程路由:课程 CRUD / 知识点 / 教材上传"""
 import logging
 import mimetypes
+import os
+import shutil
+import subprocess
+import tempfile
+import threading
 from pathlib import Path
 from typing import List, Optional
 
@@ -311,14 +316,18 @@ def retry_material_parse(
     return material_out(material, job)
 
 
-@router.get("/{course_id}/materials/{material_id}/preview")
-def preview_material(
-    course_id: int,
-    material_id: int,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """素材原文预览:仅课程可见用户;PDF 可用 #page=N 定位到具体页"""
+# 需要借助 LibreOffice 转 PDF 才能高保真预览的格式
+OFFICE_EXTS = {
+    ".doc", ".docx", ".xls", ".xlsx", ".xlsm", ".ppt", ".pptx",
+    ".odt", ".ods", ".odp", ".rtf",
+}
+_PREVIEW_LOCK = threading.Lock()
+
+
+def _visible_material(
+    db: Session, course_id: int, material_id: int, user: User,
+) -> CourseMaterial:
+    """读取课程可见素材;学生不能看到审核未通过的素材"""
     assert_course_visible(user, course_id, db)
     material = db.query(CourseMaterial).filter(
         CourseMaterial.id == material_id,
@@ -331,7 +340,106 @@ def preview_material(
         and material.moderation_status == "rejected"
     ):
         raise HTTPException(status_code=403, detail="素材未通过内容审核")
+    return material
 
+
+def _office_pdf(source: Path, material_id: int) -> Optional[Path]:
+    """用 LibreOffice 把 Office 文档转成 PDF,按文件指纹缓存;失败返回 None"""
+    try:
+        stat = source.stat()
+    except OSError:
+        return None
+    if stat.st_size > 100 * 1024 * 1024:
+        return None
+
+    cache_dir = Path(tempfile.gettempdir()) / "itea_material_previews"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    target = cache_dir / f"material-{material_id}-{int(stat.st_mtime)}-{stat.st_size}.pdf"
+    if target.is_file() and target.stat().st_size > 0:
+        return target
+
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice:
+        return None
+
+    with _PREVIEW_LOCK:
+        # 等锁期间可能已有同文件的转换结果
+        if target.is_file() and target.stat().st_size > 0:
+            return target
+        with tempfile.TemporaryDirectory(prefix="itea-lo-") as tmp:
+            env = os.environ.copy()
+            env["HOME"] = tmp
+            try:
+                subprocess.run(
+                    [
+                        soffice, "--headless", "--norestore", "--nolockcheck",
+                        "--nodefault", "--convert-to", "pdf", "--outdir", tmp,
+                        str(source),
+                    ],
+                    check=False,
+                    timeout=180,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=env,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                logger.warning("LibreOffice 转换失败(%s): %s", source.name, exc)
+                return None
+            produced = Path(tmp) / f"{source.stem}.pdf"
+            if not produced.is_file() or produced.stat().st_size == 0:
+                return None
+            shutil.copyfile(produced, target)
+    return target
+
+
+@router.get("/{course_id}/materials/{material_id}/preview")
+def preview_material(
+    course_id: int,
+    material_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    render: Optional[str] = Query(None),
+):
+    """素材原文预览:PDF/图片直接返回;Office 文档可用 render=pdf 转成 PDF 预览"""
+    material = _visible_material(db, course_id, material_id, user)
+    path = Path(material.file_path)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="素材文件缺失，请重新上传")
+
+    if render == "pdf" and path.suffix.lower() in OFFICE_EXTS:
+        pdf = _office_pdf(path, material.id)
+        if not pdf:
+            raise HTTPException(
+                status_code=503,
+                detail="该文件暂时无法转换为在线预览，请下载后用 Office/WPS 打开",
+            )
+        return FileResponse(
+            pdf,
+            media_type="application/pdf",
+            filename=f"{path.stem}.pdf",
+            content_disposition_type="inline",
+        )
+    if render == "pdf" and path.suffix.lower() != ".pdf":
+        raise HTTPException(status_code=415, detail="该文件不支持 PDF 预览")
+
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return FileResponse(
+        path,
+        media_type=media_type,
+        filename=path.name,
+        content_disposition_type="inline",
+    )
+
+
+@router.get("/{course_id}/materials/{material_id}/download")
+def download_material(
+    course_id: int,
+    material_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """素材下载:学生与教师均可下载课程可见素材"""
+    material = _visible_material(db, course_id, material_id, user)
     path = Path(material.file_path)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="素材文件缺失，请重新上传")
@@ -340,7 +448,7 @@ def preview_material(
         path,
         media_type=media_type,
         filename=path.name,
-        content_disposition_type="inline",
+        content_disposition_type="attachment",
     )
 
 
@@ -352,19 +460,7 @@ def material_text(
     db: Session = Depends(get_db),
 ):
     """素材解析文本:Office 等浏览器无法直接渲染的文件用它做文字预览"""
-    assert_course_visible(user, course_id, db)
-    material = db.query(CourseMaterial).filter(
-        CourseMaterial.id == material_id,
-        CourseMaterial.course_id == course_id,
-    ).first()
-    if not material:
-        raise HTTPException(status_code=404, detail="素材不存在")
-    if (
-        user.role not in ("teacher", "admin")
-        and material.moderation_status == "rejected"
-    ):
-        raise HTTPException(status_code=403, detail="素材未通过内容审核")
-
+    material = _visible_material(db, course_id, material_id, user)
     job = db.query(MaterialParseJob).filter(
         MaterialParseJob.material_id == material.id,
     ).first()

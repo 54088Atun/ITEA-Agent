@@ -61,7 +61,6 @@
         <footer class="class-card__actions">
           <el-button link type="primary" size="small" @click="openDetail(row)">详情</el-button>
           <el-button link type="primary" size="small" @click="openReport(row)">学情</el-button>
-          <el-button link type="primary" size="small" @click="openMembers(row)">成员</el-button>
           <el-button link type="primary" size="small" @click="openAnnouncements(row)">公告</el-button>
           <el-button v-if="isHead(row)" link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
           <el-button v-if="isHead(row)" link type="warning" size="small" @click="resetInvite(row)">重置课程码</el-button>

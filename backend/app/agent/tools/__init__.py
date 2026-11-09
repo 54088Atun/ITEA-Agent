@@ -11,6 +11,7 @@ from app.agent.tools.admin_tools import (
     admin_course_list, admin_material_stats, admin_user_lookup,
     admin_risk_summary, admin_config_get,
 )
+from app.agent.tools.workspace import workspace_overview, workspace_action
 from app.agent.tools.project_tools import (
     project_search_code, project_read_file, project_git_diff,
     project_search_logs, project_run_tests, project_db_schema,
@@ -32,6 +33,8 @@ TOOL_REGISTRY = {
     "admin.user_lookup": admin_user_lookup,
     "admin.risk_summary": admin_risk_summary,
     "admin.config_get": admin_config_get,
+    "workspace_overview": workspace_overview,
+    "workspace_action": workspace_action,
     "project.search_code": project_search_code,
     "project.read_file": project_read_file,
     "project.git_diff": project_git_diff,
@@ -48,6 +51,7 @@ __all__ = [
     "stats_analyzer", "reminder_scheduler", "sql_query", "TOOL_REGISTRY",
     "admin_course_list", "admin_material_stats", "admin_user_lookup",
     "admin_risk_summary", "admin_config_get",
+    "workspace_overview", "workspace_action",
     "project_search_code", "project_read_file", "project_git_diff",
     "project_search_logs", "project_run_tests", "project_db_schema",
     "web_search", "web_fetch",

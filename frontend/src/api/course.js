@@ -40,6 +40,22 @@ export const courseApi = {
   materialPreviewUrl(id, materialId) {
     return `/api/course/${id}/materials/${materialId}/preview`
   },
+  /** 带鉴权获取预览内容;Office 文档传 render='pdf' 由服务端转 PDF */
+  materialPreviewBlob(id, materialId, { render = '', silent = false } = {}) {
+    return http.get(`/course/${id}/materials/${materialId}/preview`, {
+      params: render ? { render } : {},
+      responseType: 'blob',
+      timeout: 180000,
+      silent,
+    })
+  },
+  /** 带鉴权下载素材 */
+  materialDownloadBlob(id, materialId) {
+    return http.get(`/course/${id}/materials/${materialId}/download`, {
+      responseType: 'blob',
+      timeout: 180000,
+    })
+  },
   /** 解析文本:Office/压缩包等无法直接渲染的文件用它做文字预览 */
   materialText(id, materialId) {
     return http.get(`/course/${id}/materials/${materialId}/text`)

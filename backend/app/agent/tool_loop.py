@@ -97,6 +97,7 @@ async def _execute(call: dict, state, approval=None, quota=None) -> dict:
 TOOL_LABELS = {
     "reminder_scheduler": "创建复习提醒",
     "project.run_tests": "运行预置测试集",
+    "workspace_action": "执行工作区写操作",
 }
 
 

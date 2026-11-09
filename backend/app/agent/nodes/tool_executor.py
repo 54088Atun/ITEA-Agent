@@ -221,6 +221,47 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "workspace_overview",
+        "description": (
+            "读取当前用户的全部工作区数据:课程、班级、作业、考试及数量统计;"
+            "用户没有指定课程时,先调用它了解全貌"
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "workspace_action",
+        "description": (
+            "执行当前用户有权限的写操作(课程/班级/成员/作业/题目/试卷);"
+            "必须先用一句话向用户说明将要修改什么,再调用本工具,系统会要求用户确认"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "course.create", "course.update",
+                        "class.create", "class.announce",
+                        "class.member_role", "class.member_remove",
+                        "assignment.create", "assignment.confirm_score",
+                        "assignment.submit", "question.create",
+                        "exam.publish", "exam.close",
+                    ],
+                    "description": "要执行的写操作",
+                },
+                "params": {
+                    "type": "object",
+                    "description": "操作参数,如课程名/班级ID/作业标题/分数等",
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "给用户确认卡片展示的操作摘要,一句话说明影响",
+                },
+            },
+            "required": ["action", "params", "summary"],
+        },
+    },
+    {
         "name": "admin.course_list",
         "description": "管理端课程查询:按审核状态/关键词列出课程,带素材数与知识点数",
         "parameters": {

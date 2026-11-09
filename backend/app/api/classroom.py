@@ -3,7 +3,7 @@ import logging
 import secrets
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -409,6 +409,46 @@ def list_members(
     prefs = privacy_service.get_map(db, [user.id for _, user in rows])
     items = [_member_out(member, user, prefs) for member, user in rows]
     return ClassMembersOut(total=len(items), items=items)
+
+
+@router.get("/{class_id}/members/search")
+def search_members(
+    class_id: int,
+    keyword: str = Query("", max_length=50),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """班级成员查找:班主任、任课教师与班级学生都可按姓名/邮箱搜索
+
+    学生只返回班内公开字段(姓名/角色/头衔),不返回邮箱与学情。
+    """
+    classroom = _class_for_member(db, class_id, user)
+    text = (keyword or "").strip()
+    query = (
+        db.query(ClassMember, User)
+        .join(User, ClassMember.student_id == User.id)
+        .filter(
+            ClassMember.class_id == classroom.id,
+            ClassMember.status == "active",
+        )
+    )
+    if text:
+        like = f"%{text}%"
+        query = query.filter(or_(User.name.like(like), User.email.like(like)))
+    rows = query.order_by(User.name.asc()).limit(30).all()
+    prefs = privacy_service.get_map(db, [item.id for _, item in rows])
+    scope = "teacher" if user.role in ("teacher", "admin") else "classmate"
+    items = [
+        {
+            "student_id": member_user.id,
+            "name": privacy_service.name_of(member_user, prefs.get(member_user.id), scope),
+            "role": member.role,
+            "title": member.title,
+            "member_type": "teacher" if member.role == "teacher" else "student",
+        }
+        for member, member_user in rows
+    ]
+    return {"total": len(items), "items": items}
 
 
 @router.post("/{class_id}/members", response_model=ClassMemberOut)

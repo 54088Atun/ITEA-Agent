@@ -13,7 +13,7 @@
           让教与学的过程都可被记录、被理解。
         </p>
         <ul class="auth__points">
-          <li><span>01</span>课程助教 · 流式答疑与思路引导</li>
+          <li><span>01</span>智能助手 · 流式答疑与思路引导</li>
           <li><span>02</span>错题复盘 · 遗忘曲线自动排程</li>
           <li><span>03</span>学情看板 · 知识点掌握度可视化</li>
         </ul>

@@ -2,11 +2,14 @@
   <div class="page page--fill">
     <div class="page-head">
       <div class="page-head__main">
-        <h2 class="page-title">备课助手</h2>
-        <p class="page-sub">教学大纲、教案框架、课堂活动与练习设计，均可对话生成</p>
+        <h2 class="page-title">智能助手</h2>
+        <p class="page-sub">课程、班级、作业、考试与教学资料，都可以在这里统一查询和处理</p>
       </div>
       <div class="page-head__actions">
-        <el-select v-model="courseId" placeholder="选择课程" filterable style="width: 220px" @change="onCourseChange">
+        <el-select
+          v-model="courseId" clearable placeholder="选择课程（可选）"
+          filterable style="width: 220px" @change="onCourseChange"
+        >
           <el-option v-for="c in courses" :key="c.id" :label="c.name" :value="c.id" />
         </el-select>
         <el-button @click="newSession">
@@ -17,21 +20,13 @@
 
     <div class="chat-container">
       <ChatWindow
-        v-if="courseId"
         ref="chatRef"
         :key="sessionKey"
-        welcome="你好!我是备课助手,可以帮你设计教学大纲、生成教案框架、规划课堂活动。"
-        placeholder="例如:帮我设计《数据结构》第3章二叉树的教学框架..."
-        :course-id="courseId"
+        welcome="你好!我是智能助手,可以查询你的课程、班级、作业与考试,也能帮你修改课程信息、建班、发作业、录入题目等。"
+        placeholder="例如:我有哪些班级?帮我给这个班加一条公告;为课程新增一道单选题..."
+        :course-id="courseId || null"
         branch="teacher"
         :suggestions="suggestions"
-      />
-      <StateBlock
-        v-else
-        state="empty"
-        title="请先选择课程"
-        hint="选择课程后即可让备课助手生成教学大纲与课堂活动"
-        class="empty-center"
       />
     </div>
   </div>
@@ -40,7 +35,6 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import ChatWindow from '../../components/ChatWindow.vue'
-import StateBlock from '../../components/StateBlock.vue'
 import { teacherApi } from '../../api/teacher'
 
 const courses = ref([])
@@ -49,9 +43,9 @@ const sessionKey = ref(0)
 const chatRef = ref()
 
 const suggestions = [
-  '帮我设计本章的教学框架',
-  '生成一组课堂讨论的引导问题',
-  '为这个知识点出一道随堂练习',
+  '我目前有哪些课程和班级?',
+  '帮我给课程新建一个班级',
+  '查看这个班最近的作业提交情况',
 ]
 
 onMounted(async () => {
@@ -74,7 +68,6 @@ function newSession() {
 
 <style scoped>
 .chat-container { flex: 1; min-height: 0; }
-.empty-center { height: 100%; display: flex; align-items: center; justify-content: center; }
 
 @media (max-width: 767px) {
   .page-head__main .page-sub {

@@ -108,7 +108,7 @@
           </el-tag>
         </div>
         <el-alert type="info" :closable="false" style="margin-top: 12px">
-          想要深入分析这道错题?请前往「课程助教」粘贴题目内容,AI 助教会引导你理清思路。
+          想要深入分析这道错题?请前往「智能助手」粘贴题目内容,助手会引导你理清思路。
         </el-alert>
       </template>
     </el-dialog>

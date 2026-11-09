@@ -60,7 +60,8 @@ http.interceptors.response.use(
         location.href = '/login'
       }
     } else {
-      ElMessage.error(msg)
+      // config.silent 用于可失败的探测请求(如 Office 转 PDF 后回退文本)
+      if (!config.silent) ElMessage.error(msg)
     }
     return Promise.reject(err)
   }
