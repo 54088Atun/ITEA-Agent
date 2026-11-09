@@ -111,6 +111,9 @@
               <el-option v-for="c in courseOptions" :key="c.id" :label="c.name" :value="c.id" />
             </el-select>
             <el-button type="primary" @click="reloadMaterials"><el-icon><Search /></el-icon> 查询</el-button>
+            <el-button v-if="userStore.canAdminWrite" @click="openMaterialUpload">
+              <el-icon><Plus /></el-icon> 上传素材
+            </el-button>
             <div class="filter-bar__spacer"></div>
             <span class="filter-bar__count">共 {{ materialTotal }} 份素材</span>
           </div>
@@ -136,8 +139,9 @@
               <el-table-column label="上传时间" width="180">
                 <template #default="{ row }">{{ formatTime(row.uploaded_at) }}</template>
               </el-table-column>
-              <el-table-column v-if="userStore.canAdminWrite" label="操作" width="100" fixed="right">
+              <el-table-column v-if="userStore.canAdminWrite" label="操作" width="150" fixed="right">
                 <template #default="{ row }">
+                  <el-button link type="primary" @click="openMaterialEdit(row)">编辑</el-button>
                   <el-button link type="danger" @click="removeMaterial(row)">删除</el-button>
                 </template>
               </el-table-column>
@@ -161,6 +165,63 @@
         </div>
       </el-tab-pane>
     </el-tabs>
+
+    <!-- 上传素材 -->
+    <el-dialog v-model="materialUploadVisible" title="上传素材" width="480px">
+      <el-form :model="materialUploadForm" label-position="top">
+        <el-form-item label="所属课程" required>
+          <el-select
+            v-model="materialUploadForm.courseId"
+            filterable
+            placeholder="选择课程"
+            style="width: 100%"
+          >
+            <el-option v-for="c in courseOptions" :key="c.id" :label="c.name" :value="c.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="资料类型" required>
+          <el-select v-model="materialUploadForm.type" style="width: 100%">
+            <el-option label="课件" value="courseware" />
+            <el-option label="教学大纲" value="syllabus" />
+            <el-option label="练习题" value="exercise" />
+            <el-option label="面试资料" value="interview" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="资料标题" required>
+          <el-input v-model="materialUploadForm.title" maxlength="200" show-word-limit />
+        </el-form-item>
+        <el-form-item label="文件" required>
+          <input ref="materialFileInput" type="file" hidden @change="onMaterialFileChange" />
+          <el-button @click="materialFileInput?.click()">选择文件</el-button>
+          <span v-if="materialFile" class="file-name">{{ materialFile.name }}</span>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="materialUploadVisible = false">取消</el-button>
+        <el-button type="primary" :loading="materialSaving" @click="submitMaterialUpload">上传</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 编辑素材 -->
+    <el-dialog v-model="materialEditVisible" title="编辑素材" width="480px">
+      <el-form :model="materialEditForm" label-position="top">
+        <el-form-item label="资料类型" required>
+          <el-select v-model="materialEditForm.type" style="width: 100%">
+            <el-option label="课件" value="courseware" />
+            <el-option label="教学大纲" value="syllabus" />
+            <el-option label="练习题" value="exercise" />
+            <el-option label="面试资料" value="interview" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="资料标题" required>
+          <el-input v-model="materialEditForm.title" maxlength="200" show-word-limit />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="materialEditVisible = false">取消</el-button>
+        <el-button type="primary" :loading="materialSaving" @click="submitMaterialEdit">保存</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 课程概览 -->
     <el-drawer
@@ -215,6 +276,7 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { adminApi } from '../../api/admin'
+import { courseApi } from '../../api/course'
 import { useUserStore } from '../../stores/user'
 import SkeletonTable from '../../components/SkeletonTable.vue'
 import StateBlock from '../../components/StateBlock.vue'
@@ -251,6 +313,15 @@ const materialPage = ref(1)
 const materialSize = ref(20)
 const materialCourseId = ref(null)
 const courseOptions = ref([])
+
+// 素材上传/编辑:与课程详情共用 /api/course 素材接口,管理员同样有权限
+const materialUploadVisible = ref(false)
+const materialEditVisible = ref(false)
+const materialSaving = ref(false)
+const materialFileInput = ref()
+const materialFile = ref(null)
+const materialUploadForm = reactive({ courseId: null, type: 'courseware', title: '' })
+const materialEditForm = reactive({ id: null, courseId: null, type: 'courseware', title: '' })
 
 onMounted(async () => {
   await Promise.all([load(), loadCourseOptions()])
@@ -394,6 +465,64 @@ async function removeMaterial(row) {
   } catch { /* 拦截器已提示 */ }
 }
 
+function openMaterialUpload() {
+  Object.assign(materialUploadForm, {
+    courseId: materialCourseId.value || null,
+    type: 'courseware',
+    title: '',
+  })
+  materialFile.value = null
+  if (materialFileInput.value) materialFileInput.value.value = ''
+  materialUploadVisible.value = true
+}
+
+function onMaterialFileChange(event) {
+  materialFile.value = event.target.files?.[0] || null
+}
+
+async function submitMaterialUpload() {
+  const { courseId, type, title } = materialUploadForm
+  if (!courseId) return ElMessage.warning('请选择所属课程')
+  if (!title.trim()) return ElMessage.warning('请输入资料标题')
+  if (!materialFile.value) return ElMessage.warning('请选择文件')
+  materialSaving.value = true
+  try {
+    await courseApi.uploadMaterial(courseId, type, title.trim(), materialFile.value)
+    ElMessage.success('素材已上传，正在后台解析')
+    materialUploadVisible.value = false
+    reloadMaterials()
+  } catch { /* 拦截器已提示 */ } finally {
+    materialSaving.value = false
+  }
+}
+
+function openMaterialEdit(row) {
+  Object.assign(materialEditForm, {
+    id: row.id,
+    courseId: row.course_id,
+    type: row.type || 'courseware',
+    title: row.title || '',
+  })
+  materialEditVisible.value = true
+}
+
+async function submitMaterialEdit() {
+  const title = materialEditForm.title.trim()
+  if (!title) return ElMessage.warning('请输入资料标题')
+  materialSaving.value = true
+  try {
+    await courseApi.updateMaterial(materialEditForm.courseId, materialEditForm.id, {
+      title,
+      type: materialEditForm.type,
+    })
+    ElMessage.success('素材已更新')
+    materialEditVisible.value = false
+    loadMaterials()
+  } catch { /* 拦截器已提示 */ } finally {
+    materialSaving.value = false
+  }
+}
+
 // 首次切到素材页时加载
 watch(tab, (v) => {
   if (v === 'materials' && !materials.value.length) loadMaterials()
@@ -465,6 +594,12 @@ async function openCourseOverview(row) {
   justify-content: flex-end;
   padding: var(--sp-3) var(--sp-5);
   border-top: 1px solid var(--border);
+}
+
+.file-name {
+  margin-left: var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
 }
 
 /* 课程概览抽屉 */
