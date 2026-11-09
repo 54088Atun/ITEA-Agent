@@ -3,6 +3,7 @@ import logging
 import threading
 import time
 from collections import deque
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
@@ -17,6 +18,9 @@ from app.core.deps import get_current_user, user_from_token
 from app.core.log_sanitizer import mask_email
 from app.models.user import User
 from app.schemas.auth import RegisterRequest, LoginRequest, TokenResponse, UserOut
+from app.services.captcha import (
+    captcha_required, generate_captcha, verify_captcha,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["认证"])
@@ -103,6 +107,17 @@ def _assert_register_domain(email: str) -> None:
         )
 
 
+def _assert_captcha(captcha_id: Optional[str], code: Optional[str]) -> None:
+    """开启图形验证码时,登录/注册必须携带有效的一次性验证码"""
+    if not captcha_required():
+        return
+    if not verify_captcha(captcha_id or "", code or ""):
+        raise HTTPException(
+            status_code=400,
+            detail="验证码错误或已过期，请刷新后重试",
+        )
+
+
 def _set_auth_cookie(response: Response, token: str) -> None:
     response.set_cookie(
         key=AUTH_COOKIE,
@@ -164,9 +179,18 @@ def _issue_session(user: User, response: Response) -> TokenResponse:
     return payload
 
 
+@router.get("/captcha")
+def get_captcha():
+    """获取图形验证码;未启用时返回 required=False,前端据此隐藏输入框"""
+    if not captcha_required():
+        return {"required": False, "captcha_id": "", "image": "", "expires_in": 0}
+    return {"required": True, **generate_captcha()}
+
+
 @router.post("/register", response_model=TokenResponse)
 def register(req: RegisterRequest, response: Response, db: Session = Depends(get_db)):
     """用户注册(公开注册仅开放学生;教师账号需管理员开通)"""
+    _assert_captcha(req.captcha_id, req.captcha_code)
     if req.role != "student":
         raise HTTPException(status_code=403, detail="教师账号需由管理员开通")
     _assert_register_domain(req.email)
@@ -192,6 +216,7 @@ def register(req: RegisterRequest, response: Response, db: Session = Depends(get
 @router.post("/login", response_model=TokenResponse)
 def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)):
     """邮箱密码登录"""
+    _assert_captcha(req.captcha_id, req.captcha_code)
     _assert_login_allowed(req.email)
     user = db.query(User).filter(User.email == req.email).first()
     if not user or not verify_password(req.password, user.password_hash):

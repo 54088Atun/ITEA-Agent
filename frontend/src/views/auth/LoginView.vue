@@ -51,6 +51,26 @@
               <el-form-item prop="password" label="密码">
                 <el-input v-model="loginForm.password" type="password" placeholder="请输入密码" size="large" :prefix-icon="Lock" show-password @input="clearLoginError" />
               </el-form-item>
+              <el-form-item v-if="captcha.required" label="验证码">
+                <div class="auth__captcha">
+                  <el-input
+                    v-model="captchaCode"
+                    placeholder="请输入图中字符"
+                    size="large"
+                    maxlength="4"
+                    @input="clearLoginError"
+                  />
+                  <img
+                    v-if="captcha.image"
+                    :src="captcha.image"
+                    alt="图形验证码"
+                    class="auth__captcha-img"
+                    title="点击刷新"
+                    @click="loadCaptcha"
+                  />
+                  <el-button v-else text :loading="captchaLoading" @click="loadCaptcha">获取验证码</el-button>
+                </div>
+              </el-form-item>
               <div class="auth__helper">
                 <el-link type="primary" :underline="false" @click="forgotVisible = true">忘记密码？</el-link>
               </div>
@@ -70,6 +90,20 @@
               </el-form-item>
               <el-form-item prop="password" label="密码">
                 <el-input v-model="regForm.password" type="password" placeholder="至少 8 位，含字母和数字" size="large" :prefix-icon="Lock" show-password />
+              </el-form-item>
+              <el-form-item v-if="captcha.required" label="验证码">
+                <div class="auth__captcha">
+                  <el-input v-model="captchaCode" placeholder="请输入图中字符" size="large" maxlength="4" />
+                  <img
+                    v-if="captcha.image"
+                    :src="captcha.image"
+                    alt="图形验证码"
+                    class="auth__captcha-img"
+                    title="点击刷新"
+                    @click="loadCaptcha"
+                  />
+                  <el-button v-else text :loading="captchaLoading" @click="loadCaptcha">获取验证码</el-button>
+                </div>
               </el-form-item>
               <el-form-item label="身份">
                 <el-tag type="info" size="large">学生账号</el-tag>
@@ -97,11 +131,12 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Message, Lock, User } from '@element-plus/icons-vue'
 import { useUserStore } from '../../stores/user'
+import { authApi } from '../../api/auth'
 
 const route = useRoute()
 const router = useRouter()
@@ -119,6 +154,37 @@ const regFormRef = ref()
 
 const loginForm = reactive({ email: '', password: '' })
 const regForm = reactive({ name: '', email: '', password: '', role: initialRole })
+const captcha = reactive({ required: false, id: '', image: '' })
+const captchaCode = ref('')
+const captchaLoading = ref(false)
+
+onMounted(loadCaptcha)
+
+async function loadCaptcha() {
+  captchaLoading.value = true
+  try {
+    const data = await authApi.captcha()
+    captcha.required = !!data.required
+    captcha.id = data.captcha_id || ''
+    captcha.image = data.image || ''
+    captchaCode.value = ''
+  } catch {
+    captcha.required = false
+    captcha.id = ''
+    captcha.image = ''
+  } finally {
+    captchaLoading.value = false
+  }
+}
+
+function captchaPayload() {
+  if (!captcha.required) return {}
+  return { captcha_id: captcha.id, captcha_code: captchaCode.value.trim() }
+}
+
+async function refreshCaptchaIfNeeded() {
+  if (captcha.required) await loadCaptcha()
+}
 
 const loginRules = {
   email: [{ required: true, message: '请输入邮箱', trigger: 'blur' }, { type: 'email', message: '邮箱格式不正确', trigger: 'blur' }],
@@ -144,9 +210,13 @@ async function doLogin() {
   const valid = await loginFormRef.value.validate().catch(() => false)
   if (!valid) return
   loginError.value = ''
+  if (captcha.required && !captchaCode.value.trim()) {
+    loginError.value = '请输入图形验证码'
+    return
+  }
   loading.value = true
   try {
-    await userStore.login(loginForm.email, loginForm.password)
+    await userStore.login(loginForm.email, loginForm.password, captchaPayload())
     ElMessage.success('登录成功')
     router.push(userStore.homePath)
   } catch (err) {
@@ -157,11 +227,15 @@ async function doLogin() {
       loginError.value = '账号或密码错误，请重新输入'
     } else if (status === 403) {
       loginError.value = typeof detail === 'string' ? detail : '账号已被禁用，请联系管理员'
+    } else if (status === 400 && typeof detail === 'string') {
+      loginError.value = detail
     } else if (!err?.response) {
       loginError.value = '无法连接服务器，请稍后重试'
     } else {
       loginError.value = typeof detail === 'string' ? detail : '登录失败，请稍后重试'
     }
+    // 验证码一次性有效:失败后刷新,避免用户重复提交同一个码
+    await refreshCaptchaIfNeeded()
   } finally {
     loading.value = false
   }
@@ -170,12 +244,19 @@ async function doLogin() {
 async function doRegister() {
   const valid = await regFormRef.value.validate().catch(() => false)
   if (!valid) return
+  if (captcha.required && !captchaCode.value.trim()) {
+    ElMessage.warning('请输入图形验证码')
+    return
+  }
   loading.value = true
   try {
-    await userStore.register(regForm)
+    await userStore.register({ ...regForm, ...captchaPayload() })
     ElMessage.success('注册成功,已自动登录')
     router.push(userStore.homePath)
-  } catch { /* 拦截器已提示 */ } finally {
+  } catch {
+    // 注册失败后验证码已消费,刷新一张新的
+    await refreshCaptchaIfNeeded()
+  } finally {
     loading.value = false
   }
 }
@@ -385,6 +466,21 @@ async function doRegister() {
   margin-top: calc(var(--sp-4) * -1 + 2px);
   margin-bottom: var(--sp-3);
   font-size: var(--fs-xs);
+}
+.auth__captcha {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+}
+.auth__captcha-img {
+  flex: 0 0 auto;
+  width: 140px;
+  height: 48px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: #fff;
+  cursor: pointer;
 }
 .auth__forgot-text {
   font-size: var(--fs-sm);

@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 10080
     # 公开注册允许的邮箱域(逗号分隔,留空表示不限制),例如 edu.cn,university.edu
     REGISTER_EMAIL_DOMAINS: str = ""
+    # 图形验证码:登录/注册前校验,一次性、5 分钟有效
+    CAPTCHA_ENABLED: bool = True
+    CAPTCHA_TTL_SECONDS: int = 300
 
     # LLM(DeepSeek,兼容 OpenAI 接口格式)
     LLM_API_BASE: str = "https://api.deepseek.com"

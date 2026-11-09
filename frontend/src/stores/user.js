@@ -56,15 +56,13 @@ export const useUserStore = defineStore('user', {
       localStorage.setItem('itea_user', JSON.stringify(user))
     },
 
-    async login(email, password) {
-      const data = await authApi.login(email, password)
+    async login(email, password, captcha = {}) {
+      const data = await authApi.login(email, password, captcha)
       this.setAuth(data.access_token, data)
     },
 
     async register(payload) {
-      const data = await authApi.register(
-        payload.email, payload.password, payload.name, payload.role
-      )
+      const data = await authApi.register(payload)
       this.setAuth(data.access_token, data)
     },
 

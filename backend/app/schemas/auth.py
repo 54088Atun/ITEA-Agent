@@ -8,6 +8,8 @@ class RegisterRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=50)
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
+    captcha_id: Optional[str] = None
+    captcha_code: Optional[str] = None
 
     @field_validator("password")
     @classmethod
@@ -20,6 +22,8 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+    captcha_id: Optional[str] = None
+    captcha_code: Optional[str] = None
 
 
 class UserOut(BaseModel):
