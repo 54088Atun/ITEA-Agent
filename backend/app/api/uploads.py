@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -16,6 +17,9 @@ from app.models.user import User
 from app.services.asr import asr_enabled, transcribe_audio
 from app.services.content_moderation import (
     moderation_enabled, record_rejection, screen_with_config,
+)
+from app.services.material_parser import (
+    CODE_EXTS, DOC_EXTS, SUPPORTED_HINT, TEXT_EXTS, extract_text, safe_filename,
 )
 from app.services.quotas import (
     assert_audio_upload_allowed, assert_image_upload_allowed,
@@ -315,4 +319,67 @@ async def upload_audio(
         "filename": filename,
         "size": len(data),
         "duration": duration,
+    }
+
+
+CHAT_DOC_EXTS = TEXT_EXTS | CODE_EXTS | DOC_EXTS
+CHAT_DOC_TEXT_LIMIT = 8000
+
+
+@router.post("/documents")
+async def upload_document(
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """聊天侧文档解析:提取文本供本轮问答使用,解析后立即删除原文件"""
+    filename = safe_filename(file.filename or "upload")
+    ext = Path(filename).suffix.lower()
+    if ext not in CHAT_DOC_EXTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"仅支持 {SUPPORTED_HINT} 等文档",
+        )
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="文件为空")
+    if len(data) > settings.CHAT_DOC_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"文件超过 {settings.CHAT_DOC_MAX_BYTES // 1024 // 1024}MB 上限",
+        )
+
+    save_dir = settings.upload_path / "docs" / str(user.id)
+    save_dir.mkdir(parents=True, exist_ok=True)
+    path = save_dir / f"{uuid.uuid4().hex}{ext}"
+    path.write_bytes(data)
+    try:
+        text = await run_in_threadpool(extract_text, path, filename)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("聊天文档解析失败: %s", safe_exception(exc))
+        raise HTTPException(status_code=422, detail="文档解析失败，请换一个文件或直接粘贴文本")
+    finally:
+        # 聊天附件只在解析时临时使用,不做留存
+        path.unlink(missing_ok=True)
+
+    text = (text or "").strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="未从文档中解析到文本内容")
+
+    if moderation_enabled(db):
+        verdict = screen_with_config(db, text)
+        if verdict["flagged"]:
+            record_rejection(db, user.id, text, verdict, "聊天文档")
+            db.commit()
+            raise HTTPException(status_code=400, detail="文档内容未通过审核，请更换文件")
+
+    return {
+        "filename": filename,
+        "size": len(data),
+        "chars": len(text),
+        "truncated": len(text) > CHAT_DOC_TEXT_LIMIT,
+        "text": text[:CHAT_DOC_TEXT_LIMIT],
     }

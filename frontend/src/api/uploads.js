@@ -20,6 +20,15 @@ export const uploadApi = {
       timeout: 120000,
     })
   },
+  /** 聊天文档解析:返回 {filename, text, chars, truncated} */
+  document(file) {
+    const form = new FormData()
+    form.append('file', file)
+    return http.post('/uploads/documents', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000,
+    })
+  },
   /** 本人识图图片:返回 {items, count} */
   listMine() {
     return http.get('/uploads/images/mine')

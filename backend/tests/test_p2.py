@@ -32,7 +32,7 @@ from app.core.security import (
     create_refresh_token, decode_access_token, decode_refresh_token,
     hash_password, verify_password,
 )
-from app.schemas.auth import LoginRequest
+from app.schemas.auth import LoginRequest, RegisterRequest
 from app.db.session import Base
 from app.models.assignment import Assignment, Submission
 from app.models.classroom import Classroom, ClassMember, CourseEnrollment
@@ -567,3 +567,25 @@ def test_admin_config_effective_value_reflects_dependency(monkeypatch, db):
     db.commit()
     item = admin_api._config_items(db, [row])[0]
     assert item.effective_value == "off"
+
+
+def test_register_email_domain_whitelist(monkeypatch, db):
+    """配置校园域后,非白名单邮箱不能注册(邮箱验证暂缓,先做域名约束)"""
+    from app.api import auth as auth_api
+    from app.schemas.auth import RegisterRequest
+
+    monkeypatch.setattr(auth_api.settings, "REGISTER_EMAIL_DOMAINS", "edu.cn")
+
+    with pytest.raises(HTTPException) as exc:
+        auth_api.register(RegisterRequest(
+            role="student", name="外部用户", email="outside@example.com",
+            password="Abcd1234",
+        ), Response(), db)
+    assert exc.value.status_code == 403
+
+    payload = auth_api.register(RegisterRequest(
+        role="student", name="校内用户", email="student@cs.edu.cn",
+        password="Abcd1234",
+    ), Response(), db)
+    assert payload.role == "student"
+    assert payload.user.email == "student@cs.edu.cn"

@@ -1,4 +1,5 @@
 """识图图片自助管理 + 素材上传实际字节限制(决策 #6 / #14)"""
+import asyncio
 import io
 from types import SimpleNamespace
 
@@ -199,3 +200,59 @@ def test_admin_material_upload_uses_same_limit(db, tmp_path, monkeypatch):
 
     assert exc.value.status_code == 413
     assert db.query(CourseMaterial).count() == 0
+
+
+# ---------- 聊天侧文档解析 ----------
+
+class _DocUpload:
+    def __init__(self, data: bytes, filename: str):
+        self._data = data
+        self.filename = filename
+
+    async def read(self) -> bytes:
+        return self._data
+
+
+def test_chat_document_parses_text_and_removes_file(db, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "UPLOAD_DIR", str(tmp_path))
+
+    result = asyncio.run(uploads_api.upload_document(
+        _DocUpload("等价类划分与边界值分析".encode("utf-8"), "note.txt"),
+        db.get(User, 1), db,
+    ))
+
+    assert result["filename"] == "note.txt"
+    assert "边界值分析" in result["text"]
+    assert result["truncated"] is False
+    # 解析后的临时文件不保留
+    assert list((tmp_path / "docs" / "1").glob("*")) == []
+
+
+def test_chat_document_rejects_unsupported_and_oversize(db, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "UPLOAD_DIR", str(tmp_path))
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(uploads_api.upload_document(
+            _DocUpload(b"x", "tool.exe"), db.get(User, 1), db,
+        ))
+    assert exc.value.status_code == 400
+
+    monkeypatch.setattr(settings, "CHAT_DOC_MAX_BYTES", 4)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(uploads_api.upload_document(
+            _DocUpload(b"12345", "note.txt"), db.get(User, 1), db,
+        ))
+    assert exc.value.status_code == 413
+
+
+def test_chat_document_truncates_long_text(db, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "UPLOAD_DIR", str(tmp_path))
+    monkeypatch.setattr(uploads_api, "CHAT_DOC_TEXT_LIMIT", 10)
+
+    result = asyncio.run(uploads_api.upload_document(
+        _DocUpload(("边界值分析" * 10).encode("utf-8"), "long.txt"),
+        db.get(User, 1), db,
+    ))
+
+    assert result["truncated"] is True
+    assert len(result["text"]) == 10

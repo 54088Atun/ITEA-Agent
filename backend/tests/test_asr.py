@@ -1,6 +1,7 @@
 """语音识别:本地 faster-whisper 与 OpenAI 兼容接口分流"""
 import asyncio
 import io
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -91,6 +92,39 @@ def test_disabled_raises(monkeypatch):
 
     with pytest.raises(RuntimeError, match="语音识别未配置"):
         asyncio.run(asr.transcribe_audio(Path("dummy.wav"), "dummy.wav"))
+
+
+def test_openai_transcription_uses_configured_language(monkeypatch, tmp_path):
+    captured = {}
+
+    class _Transcriptions:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(text="hello")
+
+    class _Audio:
+        transcriptions = _Transcriptions()
+
+    class _Client:
+        def __init__(self, **kwargs):
+            self.audio = _Audio()
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_Client))
+    monkeypatch.setattr(settings, "ASR_PROVIDER", "openai")
+    monkeypatch.setattr(settings, "ASR_API_KEY", "key")
+    monkeypatch.setattr(settings, "ASR_MODEL", "whisper-1")
+    monkeypatch.setattr(settings, "ASR_LANGUAGE", "en")
+
+    path = tmp_path / "a.webm"
+    path.write_bytes(b"fake")
+    assert asyncio.run(asr._transcribe_openai(path, "a.webm")) == "hello"
+    assert captured["language"] == "en"
+
+    # 留空时不传 language,交由服务端自动识别
+    monkeypatch.setattr(settings, "ASR_LANGUAGE", "")
+    captured.clear()
+    asyncio.run(asr._transcribe_openai(path, "a.webm"))
+    assert "language" not in captured
 
 
 @pytest.fixture()

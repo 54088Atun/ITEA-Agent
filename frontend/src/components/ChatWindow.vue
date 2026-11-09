@@ -256,6 +256,14 @@
           <button type="button" class="chat__image-del" @click="removeImage(idx)">移除</button>
         </div>
       </div>
+      <div v-if="pendingDocs.length" class="chat__docs">
+        <span v-for="(doc, idx) in pendingDocs" :key="`${doc.filename}-${idx}`" class="chat__doc">
+          <el-icon><Document /></el-icon>
+          <span class="chat__doc-name" :title="doc.filename">{{ doc.filename }}</span>
+          <span class="chat__doc-meta">{{ doc.chars }} 字<span v-if="doc.truncated">（已截断）</span></span>
+          <button type="button" class="chat__doc-del" @click="removeDoc(idx)">移除</button>
+        </span>
+      </div>
       <el-input
         v-model="input"
         type="textarea"
@@ -325,6 +333,23 @@
             hidden
             @change="onImageChange"
           />
+          <el-button
+            text :loading="uploadingDoc"
+            title="上传文档（PDF / Word / PPT / Excel / TXT）"
+            aria-label="上传文档"
+            :disabled="streaming || interviewExpired || pendingDocs.length >= MAX_DOCS"
+            @click="pickDoc"
+          >
+            <el-icon><Document /></el-icon>
+          </el-button>
+          <input
+            ref="docInput"
+            type="file"
+            accept=".pdf,.docx,.pptx,.xlsx,.xlsm,.txt,.md,.csv,.py,.js,.ts,.java,.c,.cpp,.go,.sql,.json,.html,.css"
+            multiple
+            hidden
+            @change="onDocChange"
+          />
           <el-button v-if="streaming" plain :disabled="!currentRunId" @click="openPlanDialog">
             <el-icon><EditPen /></el-icon>调整计划
           </el-button>
@@ -336,7 +361,7 @@
           </el-button>
           <el-button
             v-else type="primary" circle title="发送" aria-label="发送" class="chat__send"
-            :disabled="interviewExpired || (!input.trim() && !pendingImages.length)"
+            :disabled="interviewExpired || (!input.trim() && !pendingImages.length && !pendingDocs.length)"
             @click="send"
           >
             <el-icon><Promotion /></el-icon>
@@ -458,7 +483,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   User, MagicStick, Loading, CircleCheck, ArrowDown, Plus, Delete,
   CopyDocument, RefreshRight, VideoPause, Promotion, Microphone, Camera,
-  Search, Star, StarFilled, Connection, EditPen, WarningFilled, Clock,
+  Document, Search, Star, StarFilled, Connection, EditPen, WarningFilled, Clock,
 } from '@element-plus/icons-vue'
 import DOMPurify from 'dompurify'
 import 'katex/dist/katex.min.css'
@@ -514,8 +539,12 @@ const historyDrawerVisible = ref(false)
 const atBottom = ref(true)
 const imageInput = ref()
 const cameraInput = ref()
+const docInput = ref()
 const pendingImages = ref([])
+const pendingDocs = ref([])
+const uploadingDoc = ref(false)
 const MAX_IMAGES = 3
+const MAX_DOCS = 2
 const uploadingImage = ref(false)
 const recording = ref(false)
 const recordingSeconds = ref(0)
@@ -913,6 +942,56 @@ function removeImage(index) {
   pendingImages.value.splice(index, 1)
 }
 
+// ---------- 聊天文档上传 ----------
+
+function pickDoc() {
+  if (streaming.value || uploadingDoc.value || interviewExpired.value) return
+  if (pendingDocs.value.length >= MAX_DOCS) {
+    ElMessage.warning(`一次最多上传 ${MAX_DOCS} 份文档`)
+    return
+  }
+  docInput.value?.click()
+}
+
+async function onDocChange(event) {
+  const files = Array.from(event.target.files || [])
+  event.target.value = ''
+  if (!files.length) return
+
+  const room = MAX_DOCS - pendingDocs.value.length
+  if (room <= 0) {
+    ElMessage.warning(`一次最多上传 ${MAX_DOCS} 份文档`)
+    return
+  }
+  const selected = files.slice(0, room)
+  if (files.length > room) {
+    ElMessage.warning(`一次最多 ${MAX_DOCS} 份，已忽略多余文件`)
+  }
+
+  uploadingDoc.value = true
+  try {
+    for (const file of selected) {
+      const data = await uploadApi.document(file)
+      pendingDocs.value.push({
+        filename: data.filename || file.name,
+        text: data.text || '',
+        chars: data.chars || (data.text || '').length,
+        size: data.size || file.size,
+        truncated: !!data.truncated,
+      })
+      if (data.truncated) {
+        ElMessage.warning(`${data.filename} 内容较长，仅取前 8000 字`)
+      }
+    }
+  } catch { /* 拦截器已提示 */ } finally {
+    uploadingDoc.value = false
+  }
+}
+
+function removeDoc(index) {
+  pendingDocs.value.splice(index, 1)
+}
+
 /** 上传前压缩:长边不超过 1600，转 JPEG；小图保持原样 */
 function compressImage(file) {
   return new Promise((resolve) => {
@@ -1227,6 +1306,7 @@ async function openConversation(item) {
     }))
     input.value = ''
     pendingImages.value = []
+    pendingDocs.value = []
     voiceUsed.value = false
     scrollToBottom(true)
     nextTick(paintRich)
@@ -1244,6 +1324,7 @@ function newConversation() {
   sessionId.value = ''
   messages.value = []
   input.value = ''
+  pendingDocs.value = []
   voiceUsed.value = false
 }
 
@@ -1268,19 +1349,28 @@ function onEnter(event) {
 function send() {
   const text = input.value.trim()
   const images = pendingImages.value
-  if ((!text && !images.length) || streaming.value || interviewExpired.value) return
+  const docs = pendingDocs.value
+  if ((!text && !images.length && !docs.length) || streaming.value || interviewExpired.value) return
 
-  const attachments = images.map((img) => ({
-    type: 'image',
-    path: img.path,
-    filename: img.filename || '',
-    size: img.size || 0,
-    text: img.text || '',
-    description: img.description || '',
-  }))
+  const attachments = [
+    ...images.map((img) => ({
+      type: 'image',
+      path: img.path,
+      filename: img.filename || '',
+      size: img.size || 0,
+      text: img.text || '',
+      description: img.description || '',
+    })),
+    ...docs.map((doc) => ({
+      type: 'text',
+      filename: doc.filename,
+      text: doc.text,
+    })),
+  ]
 
   const sources = []
   if (images.length) sources.push(`${images.length} 张图片`)
+  if (docs.length) sources.push(`${docs.length} 份文档`)
   // 语音转写文本已并入 message,不再作为 audio 附件重复发送
   if (voiceUsed.value) sources.push('语音转写')
   const bubble = text || (sources.length ? '（多模态输入）' : '')
@@ -1288,6 +1378,7 @@ function send() {
   messages.value.push({ role: 'user', content: bubble, sources, attachments })
   input.value = ''
   pendingImages.value = []
+  pendingDocs.value = []
   voiceUsed.value = false
 
   const body = {
@@ -2094,6 +2185,42 @@ async function copy(text) {
   color: var(--text-secondary);
 }
 .chat__image-del {
+  border: none;
+  background: none;
+  font-size: var(--fs-xs);
+  color: var(--danger-600);
+  cursor: pointer;
+}
+
+.chat__docs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+.chat__doc {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+  max-width: 100%;
+}
+.chat__doc-name {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+.chat__doc-meta {
+  color: var(--text-tertiary, var(--text-secondary));
+}
+.chat__doc-del {
   border: none;
   background: none;
   font-size: var(--fs-xs);

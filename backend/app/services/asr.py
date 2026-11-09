@@ -88,11 +88,13 @@ async def _transcribe_openai(path: Path, filename: str) -> str:
         timeout=settings.ASR_TIMEOUT,
     )
     data = path.read_bytes()
-    resp = await client.audio.transcriptions.create(
-        model=settings.ASR_MODEL,
-        file=(filename, data),
-        language="zh",
-    )
+    payload = {
+        "model": settings.ASR_MODEL,
+        "file": (filename, data),
+    }
+    if settings.ASR_LANGUAGE:
+        payload["language"] = settings.ASR_LANGUAGE
+    resp = await client.audio.transcriptions.create(**payload)
     text = (getattr(resp, "text", "") or "").strip()
     if not text:
         raise ValueError("未识别到语音内容")

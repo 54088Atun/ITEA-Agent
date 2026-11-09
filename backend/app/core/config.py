@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     # 访问令牌短期有效,过期后由前端用刷新令牌静默续期
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 120
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 10080
+    # 公开注册允许的邮箱域(逗号分隔,留空表示不限制),例如 edu.cn,university.edu
+    REGISTER_EMAIL_DOMAINS: str = ""
 
     # LLM(DeepSeek,兼容 OpenAI 接口格式)
     LLM_API_BASE: str = "https://api.deepseek.com"
@@ -54,6 +56,8 @@ class Settings(BaseSettings):
     ASR_LANGUAGE: str = "zh"
     ASR_TIMEOUT: int = 60
     ASR_MAX_BYTES: int = 10 * 1024 * 1024
+    # 聊天侧文档解析上限(不落盘留存)
+    CHAT_DOC_MAX_BYTES: int = 10 * 1024 * 1024
 
     # 上传文件保留期(天)与每日清理时间
     FILE_RETENTION_DAYS: int = 30

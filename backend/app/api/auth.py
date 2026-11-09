@@ -77,6 +77,32 @@ def _clear_login_failures(email: str) -> None:
         _login_failures.pop(_login_key(email), None)
 
 
+def _register_domains() -> list[str]:
+    raw = settings.REGISTER_EMAIL_DOMAINS or ""
+    return [
+        item.strip().lower().lstrip("@")
+        for item in raw.split(",")
+        if item.strip()
+    ]
+
+
+def _assert_register_domain(email: str) -> None:
+    """配置了校园域白名单时,只允许白名单及其子域注册"""
+    domains = _register_domains()
+    if not domains:
+        return
+    local, _, domain = (email or "").rpartition("@")
+    domain = domain.lower()
+    allowed = bool(local) and any(
+        domain == item or domain.endswith("." + item) for item in domains
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=403,
+            detail="仅支持校园邮箱注册，请联系管理员",
+        )
+
+
 def _set_auth_cookie(response: Response, token: str) -> None:
     response.set_cookie(
         key=AUTH_COOKIE,
@@ -143,6 +169,7 @@ def register(req: RegisterRequest, response: Response, db: Session = Depends(get
     """用户注册(公开注册仅开放学生;教师账号需管理员开通)"""
     if req.role != "student":
         raise HTTPException(status_code=403, detail="教师账号需由管理员开通")
+    _assert_register_domain(req.email)
     existing = db.query(User).filter(User.email == req.email).first()
     if existing:
         raise HTTPException(status_code=400, detail="该邮箱已注册")
