@@ -86,4 +86,12 @@ export const courseApi = {
       timeout: 120000,
     })
   },
+  /** 修改课件标题/类型(课程创建者或管理员) */
+  updateMaterial(id, materialId, data) {
+    return http.patch(`/course/${id}/materials/${materialId}`, data)
+  },
+  /** 删除课件(课程创建者或管理员),同步清理文件与检索索引 */
+  deleteMaterial(id, materialId) {
+    return http.delete(`/course/${id}/materials/${materialId}`)
+  },
 }

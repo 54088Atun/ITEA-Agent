@@ -20,7 +20,9 @@ from app.core.config import settings
 from app.models.user import User
 from app.models.course import Course, CourseMaterial, KnowledgePoint, MaterialParseJob
 from app.models.classroom import CourseCollaborator, CourseEnrollment
-from app.schemas.course import CourseCollaboratorAdd, CourseCreate, CourseOut, MaterialOut
+from app.schemas.course import (
+    CourseCollaboratorAdd, CourseCreate, CourseOut, MaterialOut, MaterialUpdate,
+)
 from app.services.course_access import assert_course_visible, visible_course_ids
 from app.services.material_parser import safe_filename, validate_filename
 from app.services.uploads import UploadTooLarge, save_upload_limited
@@ -85,6 +87,14 @@ def _assert_course_owner(user: User, course_id: int, db: Session) -> Course:
     course = assert_course_visible(user, course_id, db)
     if user.role != "admin" and course.teacher_id != user.id:
         raise HTTPException(status_code=403, detail="只有课程拥有者可管理协作者")
+    return course
+
+
+def _assert_material_manager(user: User, course_id: int, db: Session) -> Course:
+    """课件管理权限:课程创建者或管理员"""
+    course = assert_course_visible(user, course_id, db)
+    if user.role != "admin" and course.teacher_id != user.id:
+        raise HTTPException(status_code=403, detail="只有课程创建者或管理员可管理课件")
     return course
 
 
@@ -272,7 +282,7 @@ def upload_material(
     if type not in ("courseware", "syllabus", "exercise", "interview"):
         raise HTTPException(status_code=400, detail="素材类型不合法")
 
-    assert_course_visible(teacher, course_id, db)
+    _assert_material_manager(teacher, course_id, db)
 
     save_dir = settings.upload_path / str(course_id)
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -335,8 +345,8 @@ def retry_material_parse(
     teacher: User = Depends(require_teacher),
     db: Session = Depends(get_db),
 ):
-    """重新解析/复核:仅课程拥有者、协作者或管理员"""
-    assert_course_visible(teacher, course_id, db)
+    """重新解析/复核:仅课程创建者或管理员"""
+    _assert_material_manager(teacher, course_id, db)
     material = db.query(CourseMaterial).filter(
         CourseMaterial.id == material_id,
         CourseMaterial.course_id == course_id,
@@ -347,6 +357,75 @@ def retry_material_parse(
     job = enqueue_parse(db, material)
     background_tasks.add_task(process_parse_job, job.id)
     return material_out(material, job)
+
+
+@router.patch("/{course_id}/materials/{material_id}", response_model=MaterialOut)
+def update_material(
+    course_id: int,
+    material_id: int,
+    req: MaterialUpdate,
+    teacher: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """修改课件标题/类型:仅课程创建者或管理员"""
+    _assert_material_manager(teacher, course_id, db)
+    material = db.query(CourseMaterial).filter(
+        CourseMaterial.id == material_id,
+        CourseMaterial.course_id == course_id,
+    ).first()
+    if not material:
+        raise HTTPException(status_code=404, detail="素材不存在")
+
+    if req.type is not None:
+        if req.type not in ("courseware", "syllabus", "exercise", "interview"):
+            raise HTTPException(status_code=400, detail="素材类型不合法")
+        material.type = req.type
+    if req.title is not None:
+        title = req.title.strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="素材标题不能为空")
+        material.title = title
+    db.commit()
+    db.refresh(material)
+
+    job = db.query(MaterialParseJob).filter(
+        MaterialParseJob.material_id == material.id,
+    ).first()
+    return material_out(material, job)
+
+
+@router.delete("/{course_id}/materials/{material_id}")
+def delete_material(
+    course_id: int,
+    material_id: int,
+    teacher: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """删除课件:仅课程创建者或管理员,同步清理文件并重建检索索引"""
+    _assert_material_manager(teacher, course_id, db)
+    material = db.query(CourseMaterial).filter(
+        CourseMaterial.id == material_id,
+        CourseMaterial.course_id == course_id,
+    ).first()
+    if not material:
+        raise HTTPException(status_code=404, detail="素材不存在")
+
+    try:
+        if material.file_path and os.path.exists(material.file_path):
+            os.remove(material.file_path)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("素材文件删除失败: %s", exc)
+
+    db.delete(material)
+    db.commit()
+    try:
+        from app.agent.tools.rag_search import rebuild_course_index
+
+        rebuild_course_index(db, course_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("课程索引重建失败 course=%s: %s", course_id, exc)
+    logger.info("素材删除: id=%s (course=%s, by=%s)", material_id, course_id, teacher.id)
+    return {"id": material_id, "deleted": True}
 
 
 # 需要借助 LibreOffice 转 PDF 才能高保真预览的格式

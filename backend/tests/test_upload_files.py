@@ -161,7 +161,7 @@ def test_teacher_material_upload_accepts_exact_limit(db, tmp_path, monkeypatch):
 def test_course_material_upload_enforces_actual_bytes(db, tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "UPLOAD_DIR", str(tmp_path))
     monkeypatch.setattr(settings, "MATERIAL_MAX_BYTES", 1024)
-    monkeypatch.setattr(course_api, "assert_course_visible", lambda *a, **kw: None)
+    monkeypatch.setattr(course_api, "_assert_material_manager", lambda *a, **kw: None)
 
     with pytest.raises(HTTPException) as exc:
         course_api.upload_material(
@@ -185,6 +185,45 @@ def test_course_material_upload_enforces_actual_bytes(db, tmp_path, monkeypatch)
     )
     assert result["id"]
     assert db.query(CourseMaterial).count() == 1
+
+
+def test_material_update_delete_permissions(db, tmp_path):
+    from app.schemas.course import MaterialUpdate
+
+    file_path = tmp_path / "m.txt"
+    file_path.write_text("x")
+    material = CourseMaterial(
+        course_id=10, type="courseware", title="旧标题",
+        file_path=str(file_path), chunk_count=0, moderation_status="approved",
+    )
+    db.add(material)
+    db.add(User(id=4, role="teacher", name="李老师", email="t2@example.com",
+                password_hash="x", status="active"))
+    db.add(User(id=5, role="admin", name="管理员", email="a2@example.com",
+                password_hash="x", status="active"))
+    db.commit()
+    db.refresh(material)
+
+    # 非课程创建者的教师不能修改
+    with pytest.raises(HTTPException) as exc:
+        course_api.update_material(
+            10, material.id, MaterialUpdate(title="越权"), db.get(User, 4), db,
+        )
+    assert exc.value.status_code == 403
+
+    # 课程创建者可以修改
+    updated = course_api.update_material(
+        10, material.id, MaterialUpdate(title="新标题", type="syllabus"),
+        db.get(User, 3), db,
+    )
+    assert updated["title"] == "新标题"
+    assert updated["type"] == "syllabus"
+
+    # 管理员可以删除,并同步清理文件
+    result = course_api.delete_material(10, material.id, db.get(User, 5), db)
+    assert result["deleted"] is True
+    assert db.query(CourseMaterial).count() == 0
+    assert not file_path.exists()
 
 
 def test_admin_material_upload_uses_same_limit(db, tmp_path, monkeypatch):

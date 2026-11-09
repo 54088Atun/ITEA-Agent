@@ -38,6 +38,12 @@ class CourseOut(BaseModel):
         from_attributes = True
 
 
+class MaterialUpdate(BaseModel):
+    """课件元信息修改:留空字段保持不变"""
+    title: Optional[str] = Field(None, max_length=200)
+    type: Optional[str] = None
+
+
 class MaterialOut(BaseModel):
     id: int
     course_id: int

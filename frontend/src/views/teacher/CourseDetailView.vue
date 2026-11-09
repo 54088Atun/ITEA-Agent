@@ -198,7 +198,7 @@
               <el-table-column label="上传时间" width="180">
                 <template #default="{ row }">{{ formatTime(row.uploaded_at) }}</template>
               </el-table-column>
-              <el-table-column label="操作" width="160">
+              <el-table-column label="操作" width="240">
                 <template #default="{ row }">
                   <el-button link type="primary" @click="openPreview(row)">查看</el-button>
                   <el-button
@@ -207,6 +207,15 @@
                   >
                     重新解析
                   </el-button>
+                  <template v-if="canEditInfo">
+                    <el-button link type="primary" @click="openEditMaterial(row)">编辑</el-button>
+                    <el-button
+                      link
+                      type="danger"
+                      :loading="materialDeletingId === row.id"
+                      @click="removeMaterial(row)"
+                    >删除</el-button>
+                  </template>
                 </template>
               </el-table-column>
               <template #empty>
@@ -368,6 +377,27 @@
         </div>
       </el-tab-pane>
     </el-tabs>
+
+    <!-- 编辑课件 -->
+    <el-dialog v-model="materialDialog" title="编辑课件" width="480px">
+      <el-form :model="materialForm" label-position="top">
+        <el-form-item label="资料类型" required>
+          <el-select v-model="materialForm.type" style="width: 100%">
+            <el-option label="课件" value="courseware" />
+            <el-option label="教学大纲" value="syllabus" />
+            <el-option label="练习题" value="exercise" />
+            <el-option label="面试资料" value="interview" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="资料标题" required>
+          <el-input v-model="materialForm.title" maxlength="200" show-word-limit />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="materialDialog = false">取消</el-button>
+        <el-button type="primary" :loading="materialSaving" @click="saveMaterial">保存</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 发布课程公告 -->
     <el-dialog v-model="announceVisible" title="发布课程公告" width="520px">
@@ -653,6 +683,12 @@ const collabSearching = ref(false)
 const collabSaving = ref(false)
 const collabTeacherId = ref(null)
 const teacherOptions = ref([])
+
+// ---------- 课件编辑/删除 ----------
+const materialDialog = ref(false)
+const materialSaving = ref(false)
+const materialDeletingId = ref(null)
+const materialForm = reactive({ id: null, type: 'courseware', title: '' })
 
 // ---------- 资料预览 ----------
 const previewVisible = ref(false)
@@ -1149,6 +1185,50 @@ async function retryParse(row) {
     ElMessage.success('已重新提交解析')
     load()
   } catch { /* 拦截器已提示 */ }
+}
+
+function openEditMaterial(row) {
+  Object.assign(materialForm, {
+    id: row.id,
+    type: row.type || 'courseware',
+    title: row.title || '',
+  })
+  materialDialog.value = true
+}
+
+async function saveMaterial() {
+  const title = materialForm.title.trim()
+  if (!title) return ElMessage.warning('请输入资料标题')
+  materialSaving.value = true
+  try {
+    await courseApi.updateMaterial(courseId, materialForm.id, {
+      title,
+      type: materialForm.type,
+    })
+    ElMessage.success('课件已更新')
+    materialDialog.value = false
+    load()
+  } catch { /* 拦截器已提示 */ } finally {
+    materialSaving.value = false
+  }
+}
+
+async function removeMaterial(row) {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除课件「${row.title}」？文件与检索索引会一并清理，且不可恢复。`,
+      '删除课件',
+      { type: 'warning' },
+    )
+  } catch { return }
+  materialDeletingId.value = row.id
+  try {
+    await courseApi.deleteMaterial(courseId, row.id)
+    ElMessage.success('已删除')
+    load()
+  } catch { /* 拦截器已提示 */ } finally {
+    materialDeletingId.value = null
+  }
 }
 </script>
 

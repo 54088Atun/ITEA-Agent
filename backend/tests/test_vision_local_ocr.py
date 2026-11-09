@@ -60,6 +60,8 @@ def test_describe_image_dispatches_local_ocr(monkeypatch, tmp_path):
 
 def test_openai_vision_still_requires_model_and_key(monkeypatch):
     monkeypatch.setattr(settings, "VISION_PROVIDER", "openai")
+    # 固定 base,避免本地 .env 的 DashScope 配置让密钥回退逻辑生效
+    monkeypatch.setattr(settings, "VISION_API_BASE", "https://api.openai.com/v1")
     monkeypatch.setattr(settings, "VISION_MODEL", "vision-model")
     monkeypatch.setattr(settings, "VISION_API_KEY", "key")
     assert vision.vision_enabled() is True
