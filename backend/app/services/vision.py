@@ -62,6 +62,11 @@ def _provider() -> str:
     return (settings.VISION_PROVIDER or "openai").strip().lower()
 
 
+def _api_key() -> str:
+    """识图密钥:优先 VISION_API_KEY,未单独配置时复用百炼 DASHSCOPE_API_KEY"""
+    return settings.VISION_API_KEY or settings.DASHSCOPE_API_KEY
+
+
 def _local_ocr_script() -> Path:
     configured = (settings.VISION_LOCAL_SCRIPT or "").strip()
     if configured:
@@ -72,7 +77,7 @@ def _local_ocr_script() -> Path:
 def vision_enabled() -> bool:
     if _provider() == "local_ocr":
         return _local_ocr_script().is_file()
-    return bool(settings.VISION_MODEL and settings.VISION_API_KEY)
+    return bool(settings.VISION_MODEL and _api_key())
 
 
 def parse_local_ocr(output: str) -> str:
@@ -242,7 +247,7 @@ async def describe_image(path: Path, mime: str) -> str | None:
 
     client = AsyncOpenAI(
         base_url=settings.VISION_API_BASE or None,
-        api_key=settings.VISION_API_KEY,
+        api_key=_api_key(),
     )
     b64 = base64.b64encode(path.read_bytes()).decode()
     resp = await client.chat.completions.create(

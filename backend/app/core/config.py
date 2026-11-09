@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     # 关闭时沿用静态模板,避免测试环境产生外部调用
     PLANNER_LLM_ENABLED: bool = False
 
+    # 阿里云百炼(DashScope)API Key:识图与语音识别共用
+    DASHSCOPE_API_KEY: str = ""
     # 图片识别:provider=openai 走多模态模型,provider=local_ocr 走本机 PP-OCRv5
     VISION_PROVIDER: str = "openai"
     VISION_API_BASE: str = ""

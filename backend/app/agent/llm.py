@@ -140,6 +140,7 @@ def _normalize_messages(messages: list[dict]) -> list[dict]:
                     _to_openai_call(call, index)
                     for index, call in enumerate(calls)
                 ]
+                # DeepSeek 思考模式要求空串也回传
                 item["reasoning_content"] = message.get("reasoning_content") or ""
         elif role == "tool":
             item["tool_call_id"] = message.get("tool_call_id") or "call_0"
