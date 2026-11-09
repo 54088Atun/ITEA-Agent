@@ -15,6 +15,17 @@ def _output_path(tmp_path, result) -> Path:
     return Path(tmp_path) / result["file_name"]
 
 
+def test_output_is_scoped_to_user_directory(tmp_path, monkeypatch):
+    """生成文件按 user_id 分子目录,静态入口才能做逐文件归属校验"""
+    monkeypatch.setattr(dg, "OUTPUT_DIR", str(tmp_path))
+    result = dg.doc_generator(
+        "lesson_plan", {"course_name": "软件测试"}, user_id=3,
+    )
+    assert not result.get("error"), result
+    assert result["file_url"] == f"/static/generated/3/{result['file_name']}"
+    assert (Path(tmp_path) / "3" / result["file_name"]).is_file()
+
+
 def test_lesson_plan_docx_has_ai_tag(tmp_path, monkeypatch):
     monkeypatch.setattr(dg, "OUTPUT_DIR", str(tmp_path))
     result = dg.doc_generator("lesson_plan", {
