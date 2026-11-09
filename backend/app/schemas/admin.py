@@ -151,6 +151,9 @@ class ConfigItemOut(BaseModel):
     description: Optional[str] = None
     updated_by: Optional[int] = None
     updated_at: Optional[datetime] = None
+    # 开关类配置的实际生效值:DB 开关为 on 但依赖服务未配置时为 off
+    effective_value: Optional[str] = None
+    effective_note: Optional[str] = None
 
     class Config:
         from_attributes = True

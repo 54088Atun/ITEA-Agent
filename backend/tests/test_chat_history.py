@@ -410,3 +410,34 @@ def test_sqlite_chat_message_request_id_migration_preserves_history(monkeypatch)
     finally:
         db.close()
         engine.dispose()
+
+
+def test_persisted_user_text_keeps_raw_input(db):
+    """会话落库只写用户原始输入,附件拼接内容只送模型(P1-9)"""
+    user = db.get(User, 1)
+    chat_api._sessions["unit-raw"] = []
+    chat_api._sessions["unit-raw2"] = []
+    try:
+        state = chat_api._build_initial_state(
+            ChatRequest(
+                session_id="unit-raw",
+                message="请解释红黑树",
+                attachments=[{"type": "image", "text": "题干文字"}],
+            ),
+            user,
+        )
+        assert state["user_input"] == "请解释红黑树"
+        assert "题干文字" in state["messages"][-1]["content"]
+        assert chat_api._persist_user_text(state) == "请解释红黑树"
+
+        only_attachment = chat_api._build_initial_state(
+            ChatRequest(
+                session_id="unit-raw2",
+                attachments=[{"type": "image", "text": "题干文字"}],
+            ),
+            user,
+        )
+        assert chat_api._persist_user_text(only_attachment) == "（多模态输入）"
+    finally:
+        chat_api._sessions.pop("unit-raw", None)
+        chat_api._sessions.pop("unit-raw2", None)

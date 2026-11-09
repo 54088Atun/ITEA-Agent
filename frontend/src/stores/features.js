@@ -14,6 +14,7 @@ export const features = reactive({
   vision_daily_limit: 30,
   feature_asr: false,
   asr_ready: false,
+  asr_max_seconds: 300,
 })
 
 export async function loadFeatures() {

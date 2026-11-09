@@ -495,3 +495,75 @@ def test_collab_single_plan_not_empty(monkeypatch):
     assert payload["source"] == "single"
     assert payload["plan"][0]["agent"] == "tutor"
     assert payload["plan"][0]["task"]
+
+
+def test_login_failure_rate_limit(db):
+    """同一账号连续失败达到阈值后返回 429,成功登录后计数清零"""
+    from app.api import auth as auth_api
+
+    auth_api._login_failures.clear()
+    email = "rate-limit@example.com"
+    try:
+        for _ in range(auth_api.LOGIN_MAX_FAILURES):
+            with pytest.raises(HTTPException) as exc:
+                auth_login(LoginRequest(email=email, password="wrong-pass1"), Response(), db)
+            assert exc.value.status_code == 401
+
+        with pytest.raises(HTTPException) as exc:
+            auth_login(LoginRequest(email=email, password="wrong-pass1"), Response(), db)
+        assert exc.value.status_code == 429
+
+        # 其他账号不受影响
+        other = LoginRequest(email="other@example.com", password="wrong-pass1")
+        with pytest.raises(HTTPException) as exc:
+            auth_login(other, Response(), db)
+        assert exc.value.status_code == 401
+    finally:
+        auth_api._login_failures.clear()
+
+
+def test_login_success_resets_failure_counter(db):
+    import app.api.auth as auth_api
+    from app.models.user import User
+
+    auth_api._login_failures.clear()
+    user = User(
+        role="student", name="限流测试", email="reset@example.com",
+        password_hash=hash_password("correct-pass1"), status="active",
+    )
+    db.add(user)
+    db.commit()
+    try:
+        for _ in range(auth_api.LOGIN_MAX_FAILURES - 1):
+            with pytest.raises(HTTPException):
+                auth_login(LoginRequest(email=user.email, password="wrong-pass1"), Response(), db)
+        auth_login(LoginRequest(email=user.email, password="correct-pass1"), Response(), db)
+        assert user.email.lower() not in auth_api._login_failures
+    finally:
+        auth_api._login_failures.clear()
+
+
+def test_admin_config_effective_value_reflects_dependency(monkeypatch, db):
+    """管理端配置返回实际生效值:开关 on 但服务未配置时标记不可用"""
+    from app.api import admin as admin_api
+    from app.models.log import SystemConfig
+
+    row = db.query(SystemConfig).filter(SystemConfig.config_key == "feature_asr").one()
+
+    monkeypatch.setitem(
+        admin_api._EFFECTIVE_CHECKS, "feature_asr",
+        (lambda: False, "语音识别服务未配置"),
+    )
+    item = admin_api._config_items(db, [row])[0]
+    assert item.effective_value == "off"
+    assert item.effective_note == "语音识别服务未配置"
+
+    monkeypatch.setitem(admin_api._EFFECTIVE_CHECKS, "feature_asr", (lambda: True, ""))
+    item = admin_api._config_items(db, [row])[0]
+    assert item.effective_value == "on"
+    assert item.effective_note is None
+
+    row.config_value = "off"
+    db.commit()
+    item = admin_api._config_items(db, [row])[0]
+    assert item.effective_value == "off"

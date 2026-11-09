@@ -51,6 +51,17 @@
             <el-input v-model="row.config_value" placeholder="config_value" :disabled="!userStore.canAdminWrite" />
           </template>
         </el-table-column>
+        <el-table-column label="实际生效" width="200">
+          <template #default="{ row }">
+            <template v-if="row.effective_value">
+              <el-tag :type="row.effective_value === 'on' ? 'success' : 'danger'" size="small">
+                {{ row.effective_value === 'on' ? '可用' : '不可用' }}
+              </el-tag>
+              <span v-if="row.effective_note" class="dim"> {{ row.effective_note }}</span>
+            </template>
+            <span v-else class="dim">—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="说明" min-width="200">
           <template #default="{ row }">
             <span v-if="row.description">{{ row.description }}</span>

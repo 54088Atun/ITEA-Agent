@@ -260,6 +260,7 @@
         v-model="input"
         type="textarea"
         :autosize="{ minRows: 2, maxRows: 6 }"
+        maxlength="4000"
         :placeholder="placeholder"
         resize="none"
         :disabled="streaming || interviewExpired"
@@ -279,11 +280,11 @@
             <span>多 Agent 协作</span>
           </label>
           <span class="chat__hint">
-            <template v-if="input.length">{{ input.length }} 字 · </template>Enter 发送 / Shift+Enter 换行 · 可粘贴截图
+            <template v-if="input.length">{{ input.length }}/4000 字 · </template>Enter 发送 / Shift+Enter 换行 · 可粘贴截图
           </span>
         </div>
         <div class="chat__composer-actions">
-          <span v-if="recording" class="chat__recording">录音中 {{ recordingSeconds }}s</span>
+          <span v-if="recording" class="chat__recording">录音中 {{ recordingSeconds }}s / {{ recordingLimit }}s</span>
           <el-button
             text :loading="uploadingAudio"
             :title="recording ? '结束录音并转写' : (features.asr_ready ? '语音输入' : '语音识别未配置，请使用文字输入')"
@@ -519,7 +520,8 @@ const uploadingImage = ref(false)
 const recording = ref(false)
 const recordingSeconds = ref(0)
 const uploadingAudio = ref(false)
-const audioSource = ref('')
+// 本轮是否使用过语音转写(仅用于气泡来源标签,转写文本已并入输入框)
+const voiceUsed = ref(false)
 const speakingIndex = ref(-1)
 const searchKeyword = ref('')
 const collaborate = ref(false)
@@ -527,6 +529,12 @@ const collaborate = ref(false)
 const canCollaborate = computed(
   () => !props.branch || !['interview', 'admin'].includes(props.branch),
 )
+// 单次录音上限跟随服务端配置,前端封顶 300 秒
+const recordingLimit = computed(() => {
+  const configured = Number(features.asr_max_seconds)
+  if (!Number.isFinite(configured) || configured <= 0) return 300
+  return Math.min(configured, 300)
+})
 const summaryVisible = ref(false)
 const summaryText = ref('')
 const summarizing = ref(false)
@@ -1057,7 +1065,8 @@ async function toggleRecording() {
       const type = mr.mimeType || 'audio/webm'
       const blob = new Blob(audioChunks, { type })
       if (!blob.size) return
-      const ext = type.includes('ogg') ? 'ogg' : 'webm'
+      const ext = type.includes('ogg') ? 'ogg'
+        : (type.includes('mp4') || type.includes('m4a') ? 'm4a' : 'webm')
       await uploadVoice(new File([blob], `voice.${ext}`, { type }))
     }
     mr.start()
@@ -1066,8 +1075,8 @@ async function toggleRecording() {
     recordingSeconds.value = 0
     audioTimer = setInterval(() => {
       recordingSeconds.value += 1
-      // 单次录音上限 120 秒，避免超长音频拖垮识别
-      if (recordingSeconds.value >= 120) stopRecording()
+      // 单次录音上限与后端 asr_max_seconds 对齐,避免前端先截断/后端后拒绝
+      if (recordingSeconds.value >= recordingLimit.value) stopRecording()
     }, 1000)
   } catch (error) {
     ElMessage.warning(microphoneErrorMessage(error))
@@ -1085,7 +1094,7 @@ async function uploadVoice(file) {
     const text = (data.text || '').trim()
     if (text) {
       input.value = input.value ? `${input.value} ${text}` : text
-      audioSource.value = audioSource.value ? `${audioSource.value} ${text}` : text
+      voiceUsed.value = true
       ElMessage.success('语音已转文字，请确认后发送')
     }
   } catch { /* 拦截器已提示(未配置/超时/失败) */ } finally {
@@ -1218,7 +1227,7 @@ async function openConversation(item) {
     }))
     input.value = ''
     pendingImages.value = []
-    audioSource.value = ''
+    voiceUsed.value = false
     scrollToBottom(true)
     nextTick(paintRich)
   } catch { /* 拦截器已提示 */ }
@@ -1235,7 +1244,7 @@ function newConversation() {
   sessionId.value = ''
   messages.value = []
   input.value = ''
-  audioSource.value = ''
+  voiceUsed.value = false
 }
 
 async function removeConversation(item) {
@@ -1259,7 +1268,7 @@ function onEnter(event) {
 function send() {
   const text = input.value.trim()
   const images = pendingImages.value
-  if ((!text && !images.length && !audioSource.value) || streaming.value || interviewExpired.value) return
+  if ((!text && !images.length) || streaming.value || interviewExpired.value) return
 
   const attachments = images.map((img) => ({
     type: 'image',
@@ -1269,19 +1278,17 @@ function send() {
     text: img.text || '',
     description: img.description || '',
   }))
-  if (audioSource.value) {
-    attachments.push({ type: 'audio', text: audioSource.value })
-  }
 
   const sources = []
   if (images.length) sources.push(`${images.length} 张图片`)
-  if (audioSource.value) sources.push('语音转写')
+  // 语音转写文本已并入 message,不再作为 audio 附件重复发送
+  if (voiceUsed.value) sources.push('语音转写')
   const bubble = text || (sources.length ? '（多模态输入）' : '')
 
   messages.value.push({ role: 'user', content: bubble, sources, attachments })
   input.value = ''
   pendingImages.value = []
-  audioSource.value = ''
+  voiceUsed.value = false
 
   const body = {
     message: text,

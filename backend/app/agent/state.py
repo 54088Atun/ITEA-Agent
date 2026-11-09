@@ -5,6 +5,7 @@ from typing import TypedDict, List, Dict, Optional, Any
 class AgentState(TypedDict):
     # === 会话上下文 ===
     messages: List[Dict]           # 对话历史 [{"role": "user/assistant", "content": "..."}]
+    user_input: str                # 本轮用户原始输入(不含附件拼接),用于会话落库与历史展示
     session_id: str                # 当前会话 ID
     user_id: int                   # 用户 ID
     user_role: str                 # teacher / student / admin

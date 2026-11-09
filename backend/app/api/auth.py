@@ -1,5 +1,8 @@
 """认证路由:注册 / 登录 / 当前用户 / 静态文件鉴权"""
 import logging
+import threading
+import time
+from collections import deque
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
@@ -22,6 +25,56 @@ router = APIRouter(prefix="/auth", tags=["认证"])
 AUTH_COOKIE = "itea_auth"
 # 刷新令牌只在本站接口内使用,Path 收窄到 /api/auth,减少暴露面
 AUTH_REFRESH_COOKIE = "itea_refresh"
+
+# 登录失败限流:同一账号 5 分钟内失败 5 次后暂时锁定(内存级,多实例由网关限流兜底)
+LOGIN_MAX_FAILURES = 5
+LOGIN_FAILURE_WINDOW = 300
+_login_failures: dict[str, deque] = {}
+_login_failures_lock = threading.Lock()
+
+
+def _login_key(email: str) -> str:
+    return (email or "").strip().lower()
+
+
+def _prune_login_failures(key: str, now: float) -> deque:
+    bucket = _login_failures.setdefault(key, deque())
+    while bucket and now - bucket[0] > LOGIN_FAILURE_WINDOW:
+        bucket.popleft()
+    return bucket
+
+
+def _assert_login_allowed(email: str) -> None:
+    key = _login_key(email)
+    if not key:
+        return
+    with _login_failures_lock:
+        bucket = _prune_login_failures(key, time.monotonic())
+        if not bucket:
+            _login_failures.pop(key, None)
+            return
+        if len(bucket) >= LOGIN_MAX_FAILURES:
+            raise HTTPException(
+                status_code=429,
+                detail="登录失败次数过多，请 5 分钟后再试",
+                headers={"Retry-After": str(LOGIN_FAILURE_WINDOW)},
+            )
+
+
+def _record_login_failure(email: str) -> None:
+    key = _login_key(email)
+    if not key:
+        return
+    with _login_failures_lock:
+        if len(_login_failures) > 5000:
+            _login_failures.clear()
+        now = time.monotonic()
+        _prune_login_failures(key, now).append(now)
+
+
+def _clear_login_failures(email: str) -> None:
+    with _login_failures_lock:
+        _login_failures.pop(_login_key(email), None)
 
 
 def _set_auth_cookie(response: Response, token: str) -> None:
@@ -112,8 +165,10 @@ def register(req: RegisterRequest, response: Response, db: Session = Depends(get
 @router.post("/login", response_model=TokenResponse)
 def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)):
     """邮箱密码登录"""
+    _assert_login_allowed(req.email)
     user = db.query(User).filter(User.email == req.email).first()
     if not user or not verify_password(req.password, user.password_hash):
+        _record_login_failure(req.email)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="邮箱或密码错误",
@@ -121,6 +176,7 @@ def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)):
     if getattr(user, "status", "active") == "disabled":
         raise HTTPException(status_code=403, detail="账号已被禁用")
 
+    _clear_login_failures(req.email)
     logger.info("用户登录: %s (%s)", mask_email(user.email), user.role)
     return _issue_session(user, response)
 

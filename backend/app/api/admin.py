@@ -47,6 +47,9 @@ from app.api.site import (
     load_site_content, HOME_KEY, CONTACT_KEY,
 )
 from app.services.audit_service import write_operation_log
+from app.services.asr import asr_enabled
+from app.services.feature_flags import is_enabled
+from app.services.vision import vision_enabled
 from app.services.runtime_metrics import runtime_metrics_snapshot
 from app.services.storage_cleanup import cleanup_uploads_task
 from app.api.chat import stream_agent_response, SSE_HEADERS
@@ -72,6 +75,30 @@ def _client_ip(request: Request) -> Optional[str]:
     if xff:
         return xff.split(",")[0].strip()
     return request.client.host if request.client else None
+
+
+# 开关类配置依赖的外部能力:DB 开关打开但服务未配置时,实际不生效
+_EFFECTIVE_CHECKS = {
+    "feature_asr": (asr_enabled, "语音识别服务未配置"),
+    "feature_image_vision": (vision_enabled, "识图服务未配置"),
+}
+
+
+def _config_items(db: Session, rows) -> List[ConfigItemOut]:
+    """配置列表:附带开关类配置的实际生效值,避免管理端误判能力可用"""
+    items = []
+    for cfg in rows:
+        item = ConfigItemOut.model_validate(cfg)
+        check = _EFFECTIVE_CHECKS.get(cfg.config_key)
+        if check:
+            probe, note = check
+            switched_on = is_enabled(db, cfg.config_key)
+            ready = bool(probe())
+            item.effective_value = "on" if switched_on and ready else "off"
+            if switched_on and not ready:
+                item.effective_note = note
+        items.append(item)
+    return items
 
 
 def _audit(db: Session, admin: User, request: Request, action: str,
@@ -1097,7 +1124,7 @@ def get_config(
 ):
     """读取全部系统配置"""
     items = db.query(SystemConfig).order_by(SystemConfig.id.asc()).all()
-    return {"items": [ConfigItemOut.model_validate(c) for c in items]}
+    return {"items": _config_items(db, items)}
 
 
 @router.put("/config", response_model=ConfigListOut)
@@ -1123,7 +1150,7 @@ def update_config(
            json.dumps(changes, ensure_ascii=False))
 
     items = db.query(SystemConfig).order_by(SystemConfig.id.asc()).all()
-    return {"items": [ConfigItemOut.model_validate(c) for c in items]}
+    return {"items": _config_items(db, items)}
 
 
 # ==================== 站点内容 ====================
