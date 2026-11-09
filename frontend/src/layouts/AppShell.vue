@@ -74,10 +74,20 @@
         </div>
         <div class="shell__top-right">
           <slot name="actions" />
-          <span class="shell__user" title="个人中心" @click="router.push('/profile')">
-            <span class="shell__user-name">{{ userStore.name }}</span>
-            <span class="shell__user-role">{{ roleSuffix }}</span>
-          </span>
+          <button
+            type="button" class="shell__user" title="进入个人中心" aria-label="进入个人中心"
+            @click="router.push('/profile')"
+          >
+            <span class="shell__avatar">
+              <img v-if="avatarUrl" :src="resolveAsset(avatarUrl)" alt="" />
+              <el-icon v-else :size="15"><User /></el-icon>
+            </span>
+            <span class="shell__user-text">
+              <span class="shell__user-name">{{ userStore.name }}</span>
+              <span class="shell__user-role">{{ roleSuffix }}</span>
+            </span>
+            <el-icon class="shell__user-arrow"><ArrowRight /></el-icon>
+          </button>
           <el-button
             class="shell__user-compact" text circle title="个人中心" aria-label="个人中心"
             @click="router.push('/profile')"
@@ -99,10 +109,11 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Menu, User } from '@element-plus/icons-vue'
+import { ArrowRight, Menu, User } from '@element-plus/icons-vue'
 import { useUserStore } from '../stores/user'
+import { resolveAsset } from '../utils/asset.js'
 
 defineProps({
   brand: { type: String, default: 'ITEA 智能助教' },
@@ -117,6 +128,7 @@ const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
 const mobileNavOpen = ref(false)
+const avatarUrl = computed(() => userStore.user?.avatar_url || '')
 
 function closeMobileNav() {
   mobileNavOpen.value = false
@@ -327,9 +339,35 @@ function onLogout() {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  padding-left: var(--sp-3);
+  padding: 4px var(--sp-2) 4px var(--sp-3);
+  margin-left: var(--sp-2);
+  border: 0;
   border-left: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.18s ease;
 }
+.shell__user:hover { background: var(--bg-subtle); }
+.shell__user:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.shell__avatar {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--bg-subtle);
+  color: var(--primary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.shell__avatar img { width: 100%; height: 100%; object-fit: cover; }
+.shell__user-text { display: flex; align-items: center; gap: var(--sp-2); }
+.shell__user-arrow { color: var(--text-placeholder); font-size: 12px; }
 .shell__user-name {
   font-size: var(--fs-sm);
   color: var(--text-primary);

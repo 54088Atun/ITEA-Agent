@@ -27,6 +27,45 @@
         </div>
       </div>
 
+      <div class="profile-overview">
+        <div class="profile-overview__item">
+          <span class="profile-overview__label">用户 ID</span>
+          <strong>#{{ userStore.user?.id || '—' }}</strong>
+        </div>
+        <div class="profile-overview__item">
+          <span class="profile-overview__label">账号角色</span>
+          <strong>{{ roleLabel }}</strong>
+        </div>
+        <div class="profile-overview__item">
+          <span class="profile-overview__label">账号状态</span>
+          <strong>{{ accountStatusLabel }}</strong>
+        </div>
+        <div class="profile-overview__item">
+          <span class="profile-overview__label">邮箱</span>
+          <strong>{{ form.email || '未填写' }}</strong>
+        </div>
+        <template v-if="userStore.isTeacher">
+          <div class="profile-overview__item">
+            <span class="profile-overview__label">我的班级</span>
+            <strong>{{ classes.length }}</strong>
+          </div>
+          <div class="profile-overview__item">
+            <span class="profile-overview__label">发布记录</span>
+            <strong>{{ publishRows.length }}</strong>
+          </div>
+          <div class="profile-overview__item">
+            <span class="profile-overview__label">待批改</span>
+            <strong>{{ pendingGradeCount }}</strong>
+          </div>
+        </template>
+        <template v-else-if="userStore.isStudent">
+          <div class="profile-overview__item">
+            <span class="profile-overview__label">学习记录</span>
+            <strong>{{ records.length }}</strong>
+          </div>
+        </template>
+      </div>
+
       <el-form :model="form" label-width="90px" class="profile-form">
         <el-form-item label="姓名">
           <el-input v-model="form.name" maxlength="50" />
@@ -299,6 +338,13 @@ const roleLabel = computed(() => {
   const map = { teacher: '教师', student: '学生', admin: '管理员' }
   return map[userStore.role] || userStore.role
 })
+const accountStatusLabel = computed(() => (
+  { active: '正常', disabled: '已禁用' }[userStore.user?.status] || '正常'
+))
+const pendingGradeCount = computed(() => publishRows.value.reduce((sum, row) => {
+  if (row.submission_count == null) return sum
+  return sum + Math.max(0, Number(row.submission_count) - Number(row.graded_count || 0))
+}, 0))
 
 onMounted(async () => {
   try {
@@ -603,6 +649,32 @@ function formatTime(t) {
 }
 .profile-form {
   max-width: 420px;
+}
+.profile-overview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+.profile-overview__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-subtle);
+}
+.profile-overview__label {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+.profile-overview__item strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .profile-sub {
   font-size: var(--fs-sm);
