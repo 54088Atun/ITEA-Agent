@@ -36,7 +36,7 @@
       <div class="kpi">
         <div class="kpi__label">平均耗时</div>
         <div class="kpi__value">{{ formatDuration(stats.avg_duration_ms) }}</div>
-        <div class="kpi__hint">按已结束运行统计</div>
+        <div class="kpi__hint">成功回答平均，不含拦截与失败</div>
       </div>
     </div>
 

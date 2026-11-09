@@ -66,7 +66,10 @@ def _get_owned_course(db: Session, course_id: int, teacher: User) -> Course:
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在或无权访问")
     if teacher.role != "admin" and course.teacher_id != teacher.id:
-        raise HTTPException(status_code=404, detail="课程不存在或无权访问")
+        # 仍用 404 避免枚举无关课程,但文案说明真实原因
+        raise HTTPException(
+            status_code=404, detail="课程不存在，或你不是该课程的授课教师",
+        )
     return course
 
 

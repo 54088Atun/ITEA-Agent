@@ -51,6 +51,9 @@
               <el-form-item prop="password" label="密码">
                 <el-input v-model="loginForm.password" type="password" placeholder="请输入密码" size="large" :prefix-icon="Lock" show-password @input="clearLoginError" />
               </el-form-item>
+              <div class="auth__helper">
+                <el-link type="primary" :underline="false" @click="forgotVisible = true">忘记密码？</el-link>
+              </div>
               <el-button type="primary" size="large" class="auth__submit" :loading="loading" @click="doLogin">
                 登 录
               </el-button>
@@ -66,7 +69,7 @@
                 <el-input v-model="regForm.email" placeholder="name@campus.edu" size="large" :prefix-icon="Message" />
               </el-form-item>
               <el-form-item prop="password" label="密码">
-                <el-input v-model="regForm.password" type="password" placeholder="至少 6 位" size="large" :prefix-icon="Lock" show-password />
+                <el-input v-model="regForm.password" type="password" placeholder="至少 8 位，含字母和数字" size="large" :prefix-icon="Lock" show-password />
               </el-form-item>
               <el-form-item label="身份">
                 <el-tag type="info" size="large">学生账号</el-tag>
@@ -78,6 +81,16 @@
             </el-form>
           </el-tab-pane>
         </el-tabs>
+
+        <el-dialog v-model="forgotVisible" title="找回密码" width="380px">
+          <p class="auth__forgot-text">
+            出于账号安全考虑，系统暂不提供自助改密。请使用校园邮箱联系任课教师或系统管理员，
+            由管理员在「用户管理」中重置密码后再登录。
+          </p>
+          <template #footer>
+            <el-button type="primary" @click="forgotVisible = false">我知道了</el-button>
+          </template>
+        </el-dialog>
       </div>
     </section>
   </div>
@@ -100,6 +113,7 @@ const initialRole = 'student'
 const tab = ref(route.query.mode === 'register' ? 'register' : 'login')
 const loading = ref(false)
 const loginError = ref('')
+const forgotVisible = ref(false)
 const loginFormRef = ref()
 const regFormRef = ref()
 
@@ -113,7 +127,11 @@ const loginRules = {
 const regRules = {
   name: [{ required: true, message: '请输入姓名', trigger: 'blur' }],
   email: [{ required: true, message: '请输入邮箱', trigger: 'blur' }, { type: 'email', message: '邮箱格式不正确', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }, { min: 6, message: '密码至少6位', trigger: 'blur' }],
+  password: [
+    { required: true, message: '请输入密码', trigger: 'blur' },
+    { min: 8, message: '密码至少 8 位', trigger: 'blur' },
+    { pattern: /^(?=.*[A-Za-z])(?=.*\d).+$/, message: '需同时包含字母和数字', trigger: 'blur' },
+  ],
   role: [{ required: true, message: '请选择角色', trigger: 'change' }],
 }
 
@@ -360,6 +378,18 @@ async function doRegister() {
 .auth__error :deep(.el-alert__title) {
   font-size: var(--fs-sm);
   line-height: 1.6;
+}
+.auth__helper {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: calc(var(--sp-4) * -1 + 2px);
+  margin-bottom: var(--sp-3);
+  font-size: var(--fs-xs);
+}
+.auth__forgot-text {
+  font-size: var(--fs-sm);
+  line-height: 1.8;
+  color: var(--text-secondary);
 }
 .auth__role-tip {
   margin-top: 4px;

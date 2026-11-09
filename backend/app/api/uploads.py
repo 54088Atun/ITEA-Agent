@@ -22,7 +22,8 @@ from app.services.quotas import (
     record_audio_upload, record_image_upload,
 )
 from app.services.vision import (
-    describe_image, describe_image_semantics, vision_enabled, vlm_enabled,
+    MAX_IMAGE_BYTES, describe_image, describe_image_semantics, vision_enabled,
+    vlm_enabled,
 )
 
 logger = logging.getLogger(__name__)
@@ -124,6 +125,13 @@ async def _process_image(file: UploadFile, user: User, db: Session) -> dict:
     error = None
     try:
         text = await describe_image(path, mime)
+    except ValueError as e:
+        # 图片过大 / 未识别到文字属于输入问题,不能笼统报"服务不可用"
+        logger.warning("图片识图失败: %s", safe_exception(e))
+        if len(data) > MAX_IMAGE_BYTES:
+            error = f"图片过大，请压缩后再上传（上限 {MAX_IMAGE_BYTES // 1024 // 1024}MB）"
+        else:
+            error = "未识别到图片中的文字，请换一张清晰的图片或直接输入题目"
     except Exception as e:  # noqa: BLE001
         logger.warning("图片识图失败: %s", safe_exception(e))
         error = "识图服务暂时不可用，请手动输入题目内容"

@@ -124,9 +124,9 @@ def test_auth_register_and_login_logs_use_masked_email(caplog, monkeypatch):
 
     with caplog.at_level(logging.INFO, logger="app.api.auth"):
         auth_api.register(RegisterRequest(
-            role="student", name="Alice", email=email, password="secret",
+            role="student", name="Alice", email=email, password="secret123",
         ), Response(), db)
-        auth_api.login(LoginRequest(email=email, password="secret"), Response(), db)
+        auth_api.login(LoginRequest(email=email, password="secret123"), Response(), db)
 
     assert masked_calls == [email, email]
     assert email not in caplog.text

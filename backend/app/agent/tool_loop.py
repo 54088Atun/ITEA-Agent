@@ -124,11 +124,14 @@ async def _emit_confirm(sink, state, item: dict, confirm_sent: set) -> None:
 
 async def _run_calls(calls: list[dict], history: list[dict], state,
                      trace: list[dict], approval=None, quota=None,
-                     sink=None, confirm_sent=None, reasoning: str = "") -> None:
+                     sink=None, confirm_sent=None, reasoning: str = "",
+                     cache: dict | None = None) -> None:
     """批量执行一轮工具调用,按 assistant(tool_calls) + tool 消息回灌
 
     reasoning: 模型本轮产生的 reasoning_content;思考模式下必须原样回灌,
     预置的强制检索轮次没有模型思考内容,回传空串即可(服务端接受)。
+    cache: 同一轮内"工具名+参数"完全相同的调用复用首次结果,
+    避免模型反复用同样参数重复查询,放大延迟与配额消耗。
     """
     prepared: list[dict] = []
     for index, call in enumerate(calls):
@@ -147,13 +150,26 @@ async def _run_calls(calls: list[dict], history: list[dict], state,
     })
 
     for item in prepared:
-        result = await _execute(item, state, approval=approval, quota=quota)
+        cache_key = json.dumps(
+            {"name": item["name"], "arguments": item["arguments"]},
+            ensure_ascii=False, sort_keys=True, default=str,
+        )
+        cached = cache.get(cache_key) if cache is not None else None
+        if cached is not None:
+            logger.info("工具同参复用本轮结果: %s", item["name"])
+            result = cached
+        else:
+            result = await _execute(item, state, approval=approval, quota=quota)
+            # 只缓存成功结果:失败可能是瞬时故障,允许模型换参重试
+            if cache is not None and isinstance(result, dict) and result.get("ok"):
+                cache[cache_key] = result
         if isinstance(result, dict) and result.get("requires_confirmation"):
             await _emit_confirm(sink, state, item, confirm_sent if confirm_sent is not None else set())
         trace.append({
             "name": item["name"],
             "arguments": item["arguments"],
             "result": result,
+            "cached": cached is not None,
         })
         # 回灌给模型前先消毒:工具输出属于不可信输入,可能夹带注入指令
         content = json.dumps(
@@ -195,12 +211,14 @@ async def run_tool_loop(
     quota = TurnQuota()
     # 同一工具只弹一次确认卡片,避免模型重试导致重复下发
     confirm_sent: set = set()
+    # 本轮同参工具调用复用结果,避免重复查询
+    cache: dict = {}
 
     if forced_call:
         await _run_calls(
             [forced_call], history, state, trace,
             approval=approved, quota=quota,
-            sink=sink, confirm_sent=confirm_sent,
+            sink=sink, confirm_sent=confirm_sent, cache=cache,
         )
 
     for _ in range(max_steps):
@@ -210,7 +228,7 @@ async def run_tool_loop(
             return content, trace
         await _run_calls(
             calls, history, state, trace, approval=approved, quota=quota,
-            sink=sink, confirm_sent=confirm_sent, reasoning=reasoning,
+            sink=sink, confirm_sent=confirm_sent, reasoning=reasoning, cache=cache,
         )
 
     logger.warning(

@@ -983,10 +983,23 @@ async function addImageFiles(files) {
 
   uploadingImage.value = true
   try {
+    // 与服务端保持一致:上限取配置值与 8MB 的较小值(压缩后再校验)
+    const maxMb = Math.max(1, Math.min(Number(features.upload_image_max_mb) || 8, 8))
+    const maxBytes = maxMb * 1024 * 1024
     const prepared = []
+    let tooLarge = 0
     for (const file of selected) {
-      prepared.push(await compressImage(file))
+      const item = await compressImage(file)
+      if (item.size > maxBytes) {
+        tooLarge += 1
+        continue
+      }
+      prepared.push(item)
     }
+    if (tooLarge) {
+      ElMessage.warning(`图片过大，请压缩后再上传（上限 ${maxMb}MB）`)
+    }
+    if (!prepared.length) return
     const data = await uploadApi.images(prepared)
     if (!data.vision_enabled) {
       ElMessage.warning('识图服务未配置，图片未加入待发送列表，请直接输入题目文字')
@@ -997,8 +1010,8 @@ async function addImageFiles(files) {
       if (item.path) {
         pendingImages.value.push({
           path: item.path,
-          filename: selected[idx]?.name || '',
-          size: selected[idx]?.size || 0,
+          filename: prepared[idx]?.name || '',
+          size: prepared[idx]?.size || 0,
           text: item.text || '',
           description: item.description || '',
           visionEnabled: true,

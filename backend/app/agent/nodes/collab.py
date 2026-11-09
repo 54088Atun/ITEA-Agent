@@ -211,8 +211,17 @@ async def collab_plan_node(state: AgentState) -> dict:
             primary = str(decision.get("primary_agent") or "").strip().lower()
         branch = _single_branch(user_role, primary, user_input)
         logger.info("协作规划判定为简单任务,降级单 Agent: %s", branch)
+        # 即使是单 Agent 也回填实际执行计划,避免 plan 为空导致时间线看不出要做什么
         await _notify(state, "collab_plan", {
-            "source": "single", "plan": [], "branch": branch,
+            "source": "single",
+            "plan": [{
+                "agent": branch,
+                "label": AGENT_LABELS.get(
+                    branch, "管理助手" if branch == "admin" else branch,
+                ),
+                "task": user_input[:MAX_TASK_LEN],
+            }],
+            "branch": branch,
         })
         return {"collab_tasks": [], "collab_results": [], "branch": branch}
 

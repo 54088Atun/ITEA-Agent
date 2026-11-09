@@ -167,13 +167,23 @@ def get_run(db: Session, run_id: int) -> Optional[dict]:
 
 
 def run_stats(db: Session) -> dict:
-    """管理端概览:状态分布与平均耗时"""
+    """管理端概览:状态分布与耗时
+
+    平均耗时只统计成功完成的运行:风控拦截、幂等复用与快速失败
+    往往只有几百毫秒,混入平均值会把真实回答耗时(通常数秒到数十秒)稀释掉。
+    """
     status_rows = dict(
         db.query(AgentRun.status, func.count(AgentRun.id))
         .group_by(AgentRun.status)
         .all()
     )
     avg_duration = (
+        db.query(func.avg(AgentRun.duration_ms))
+        .filter(AgentRun.duration_ms.isnot(None), AgentRun.status == "success")
+        .scalar()
+        or 0
+    )
+    avg_duration_all = (
         db.query(func.avg(AgentRun.duration_ms))
         .filter(AgentRun.duration_ms.isnot(None))
         .scalar()
@@ -182,6 +192,8 @@ def run_stats(db: Session) -> dict:
     return {
         "by_status": {str(key): int(value) for key, value in status_rows.items()},
         "avg_duration_ms": int(avg_duration),
+        "avg_duration_all_ms": int(avg_duration_all),
+        "success_count": int(status_rows.get("success", 0)),
     }
 
 

@@ -15,7 +15,9 @@ class Settings(BaseSettings):
     # JWT
     SECRET_KEY: str = DEFAULT_SECRET_KEY
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
+    # 访问令牌短期有效,过期后由前端用刷新令牌静默续期
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 120
+    REFRESH_TOKEN_EXPIRE_MINUTES: int = 10080
 
     # LLM(DeepSeek,兼容 OpenAI 接口格式)
     LLM_API_BASE: str = "https://api.deepseek.com"

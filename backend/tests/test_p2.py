@@ -18,13 +18,21 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+from starlette.responses import Response
 
 import app.api.student as student_api
 from app.api.assignments import create_assignment
+from app.api.auth import (
+    AUTH_COOKIE, AUTH_REFRESH_COOKIE, login as auth_login, refresh as auth_refresh,
+)
 from app.api.course_share import create_share
 from app.api.me import DeactivateRequest, deactivate_account, export_my_data
 from app.api.records import student_records, teacher_publish_records
-from app.core.security import hash_password, verify_password
+from app.core.security import (
+    create_refresh_token, decode_access_token, decode_refresh_token,
+    hash_password, verify_password,
+)
+from app.schemas.auth import LoginRequest
 from app.db.session import Base
 from app.models.assignment import Assignment, Submission
 from app.models.classroom import Classroom, ClassMember, CourseEnrollment
@@ -357,3 +365,133 @@ def test_image_upload_quotas(db):
     with pytest.raises(HTTPException) as exc:
         assert_image_upload_allowed(db, student, 100)
     assert exc.value.status_code == 403
+
+
+def test_image_upload_limit_capped_at_8mb(db):
+    """后台即使配置到 20MB,对外口径与落盘校验都按 8MB 收口"""
+    cfg = db.query(SystemConfig).filter_by(config_key="upload_image_max_mb").first()
+    cfg.config_value = "20"
+    db.commit()
+
+    assert public_features(db)["upload_image_max_mb"] == 8
+    with pytest.raises(HTTPException) as exc:
+        assert_image_upload_allowed(db, db.get(User, 3), 9 * 1024 * 1024)
+    assert exc.value.status_code == 400
+    assert "图片过大" in exc.value.detail
+
+
+def _cookie_value(response, name: str) -> str:
+    for key, value in response.raw_headers:
+        if key.lower() != b"set-cookie":
+            continue
+        text = value.decode("latin-1")
+        if text.startswith(f"{name}="):
+            return text.split(";", 1)[0].split("=", 1)[1]
+    return ""
+
+
+def test_login_sets_access_and_refresh_cookies(db):
+    response = Response()
+    payload = auth_login(
+        LoginRequest(email="s1@example.com", password=PASSWORD), response, db,
+    )
+    access = _cookie_value(response, AUTH_COOKIE)
+    refresh = _cookie_value(response, AUTH_REFRESH_COOKIE)
+    assert access == payload.access_token
+    assert refresh
+    assert payload.expires_in > 0
+
+    # 刷新令牌不能当访问令牌使用
+    assert decode_access_token(refresh) is None
+    assert decode_refresh_token(access) is None
+    assert decode_refresh_token(refresh)["sub"] == "3"
+
+
+def test_refresh_rotates_access_token(db):
+    from types import SimpleNamespace
+
+    token = create_refresh_token(3, 0)
+    request = SimpleNamespace(cookies={AUTH_REFRESH_COOKIE: token})
+    response = Response()
+    payload = auth_refresh(request, response, db)
+
+    assert payload.access_token != token
+    assert decode_access_token(payload.access_token)["sub"] == "3"
+    assert _cookie_value(response, AUTH_COOKIE) == payload.access_token
+    assert _cookie_value(response, AUTH_REFRESH_COOKIE)
+
+
+def test_refresh_rejects_access_token_and_missing_cookie(db):
+    from types import SimpleNamespace
+
+    access = create_refresh_token(3, 0)
+    with pytest.raises(HTTPException) as exc:
+        auth_refresh(SimpleNamespace(cookies={}), Response(), db)
+    assert exc.value.status_code == 401
+
+    # 访问令牌放错位置同样拒绝
+    with pytest.raises(HTTPException) as exc:
+        auth_refresh(
+            SimpleNamespace(cookies={AUTH_REFRESH_COOKIE: "not-a-token"}),
+            Response(), db,
+        )
+    assert exc.value.status_code == 401
+    assert decode_refresh_token(access) is not None
+
+
+def test_tool_loop_reuses_identical_calls(monkeypatch):
+    """同参工具调用只执行一次,第二次直接复用本轮结果"""
+    import app.agent.tool_loop as loop
+
+    executed: list[str] = []
+
+    async def fake_execute(item, state, approval=None, quota=None):
+        executed.append(item["name"])
+        return {"ok": True, "data": {"count": 1}}
+
+    monkeypatch.setattr(loop, "_execute", fake_execute)
+
+    history: list[dict] = []
+    trace: list[dict] = []
+    state = {"user_role": "admin", "user_id": 5, "session_id": "sess-cache"}
+    call = {"name": "admin.course_list", "arguments": {"limit": 10}, "id": "c1"}
+    other = {"name": "admin.course_list", "arguments": {"limit": 5}, "id": "c2"}
+    cache: dict = {}
+
+    asyncio.run(loop._run_calls([call], history, state, trace, cache=cache))
+    asyncio.run(loop._run_calls([call], history, state, trace, cache=cache))
+    asyncio.run(loop._run_calls([other], history, state, trace, cache=cache))
+
+    # 同参复用,换参重新执行
+    assert executed == ["admin.course_list", "admin.course_list"]
+    assert trace[0]["cached"] is False
+    assert trace[1]["cached"] is True
+    assert trace[2]["cached"] is False
+
+
+def test_collab_single_plan_not_empty(monkeypatch):
+    """降级为单 Agent 时也回填实际执行计划,避免 plan 为空"""
+    import app.agent.nodes.collab as collab
+
+    async def fake_llm(messages, **kwargs):
+        return '{"primary_agent": "tutor", "tasks": []}'
+
+    monkeypatch.setattr(collab, "llm_invoke", fake_llm)
+    queue = asyncio.Queue()
+    state = {
+        "user_role": "student",
+        "messages": [{"role": "user", "content": "这道题怎么写"}],
+        "stream_queue": queue,
+    }
+
+    async def run_and_collect():
+        result = await collab.collab_plan_node(state)
+        return result, await asyncio.wait_for(queue.get(), timeout=1)
+
+    out, (_, payload) = asyncio.run(run_and_collect())
+
+    assert out["branch"] == "tutor"
+    assert out["collab_tasks"] == []
+    assert payload["source"] == "single"
+    assert payload["plan"][0]["agent"] == "tutor"
+    assert payload["plan"][0]["task"]

@@ -140,9 +140,12 @@ def test_loop_stops_at_max_steps(monkeypatch):
         AsyncMock(return_value="达到上限后的收尾回答"),
     )
 
+    rounds = {"n": 0}
+
     async def planner(messages, tools):
+        rounds["n"] += 1
         return ToolPlan(tool_calls=[{
-            "id": f"c{len(executed)}", "name": "course_evidence",
+            "id": f"c{rounds['n']}", "name": "course_evidence",
             "arguments": {"query": "q"},
         }])
 
@@ -152,7 +155,9 @@ def test_loop_stops_at_max_steps(monkeypatch):
     ))
 
     assert len(trace) == 2
-    assert len(executed) == 2
+    # 同参调用复用本轮结果,不会重复查询
+    assert len(executed) == 1
+    assert trace[1]["cached"] is True
     assert text == "达到上限后的收尾回答"
 
 

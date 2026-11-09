@@ -6,7 +6,10 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import get_db
-from app.core.security import hash_password, verify_password, create_access_token
+from app.core.security import (
+    create_access_token, create_refresh_token, decode_refresh_token, hash_password,
+    verify_password,
+)
 from app.core.deps import get_current_user, user_from_token
 from app.core.log_sanitizer import mask_email
 from app.models.user import User
@@ -17,6 +20,8 @@ router = APIRouter(prefix="/auth", tags=["认证"])
 
 # 静态文件(/uploads、/static/generated)由 nginx auth_request 校验该 Cookie
 AUTH_COOKIE = "itea_auth"
+# 刷新令牌只在本站接口内使用,Path 收窄到 /api/auth,减少暴露面
+AUTH_REFRESH_COOKIE = "itea_refresh"
 
 
 def _set_auth_cookie(response: Response, token: str) -> None:
@@ -28,6 +33,18 @@ def _set_auth_cookie(response: Response, token: str) -> None:
         secure=settings.ENVIRONMENT.strip().lower() == "production",
         samesite="lax",
         path="/",
+    )
+
+
+def _set_refresh_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        key=AUTH_REFRESH_COOKIE,
+        value=token,
+        max_age=settings.REFRESH_TOKEN_EXPIRE_MINUTES * 60,
+        httponly=True,
+        secure=settings.ENVIRONMENT.strip().lower() == "production",
+        samesite="lax",
+        path="/api/auth",
     )
 
 
@@ -49,11 +66,23 @@ def _token_response(user: User) -> TokenResponse:
     )
     return TokenResponse(
         access_token=token,
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         role=user.role,
         name=user.name,
         user_id=user.id,
         user=UserOut.model_validate(user),
     )
+
+
+def _issue_session(user: User, response: Response) -> TokenResponse:
+    """签发访问令牌 + 刷新令牌,并写入 HttpOnly Cookie"""
+    payload = _token_response(user)
+    refresh = create_refresh_token(
+        user.id, getattr(user, "token_version", 0) or 0,
+    )
+    _set_auth_cookie(response, payload.access_token)
+    _set_refresh_cookie(response, refresh)
+    return payload
 
 
 @router.post("/register", response_model=TokenResponse)
@@ -77,9 +106,7 @@ def register(req: RegisterRequest, response: Response, db: Session = Depends(get
     db.refresh(user)
 
     logger.info("新用户注册: %s (%s)", mask_email(user.email), user.role)
-    payload = _token_response(user)
-    _set_auth_cookie(response, payload.access_token)
-    return payload
+    return _issue_session(user, response)
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -95,9 +122,28 @@ def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)):
         raise HTTPException(status_code=403, detail="账号已被禁用")
 
     logger.info("用户登录: %s (%s)", mask_email(user.email), user.role)
-    payload = _token_response(user)
-    _set_auth_cookie(response, payload.access_token)
-    return payload
+    return _issue_session(user, response)
+
+
+@router.post("/refresh", response_model=TokenResponse)
+def refresh(request: Request, response: Response, db: Session = Depends(get_db)):
+    """用 HttpOnly 刷新令牌换发新的访问令牌,并轮换刷新令牌"""
+    token = request.cookies.get(AUTH_REFRESH_COOKIE) or ""
+    payload = decode_refresh_token(token) if token else None
+    if payload is None:
+        raise HTTPException(status_code=401, detail="登录状态已失效，请重新登录")
+    try:
+        user_id = int(payload.get("sub"))
+        token_version = int(payload.get("ver", 0))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="登录状态已失效，请重新登录")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None or int(getattr(user, "token_version", 0) or 0) != token_version:
+        raise HTTPException(status_code=401, detail="登录状态已失效，请重新登录")
+    if getattr(user, "status", "active") == "disabled":
+        raise HTTPException(status_code=403, detail="账号已被禁用")
+    return _issue_session(user, response)
 
 
 @router.get("/verify")
@@ -112,8 +158,9 @@ def verify(request: Request, db: Session = Depends(get_db)):
 
 @router.post("/logout")
 def logout(response: Response):
-    """退出登录时清除静态文件鉴权 Cookie"""
+    """退出登录时清除访问令牌与刷新令牌 Cookie"""
     response.delete_cookie(AUTH_COOKIE, path="/")
+    response.delete_cookie(AUTH_REFRESH_COOKIE, path="/api/auth")
     return {"ok": True}
 
 

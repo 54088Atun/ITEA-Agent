@@ -32,9 +32,11 @@ def assert_image_upload_allowed(db: Session, user: User, size: int) -> None:
     if not is_enabled(db, "feature_image_vision"):
         raise HTTPException(status_code=403, detail="图片识图功能已关闭，请联系管理员")
 
-    max_mb = max(1, min(get_int(db, "upload_image_max_mb", 8), 20))
+    max_mb = max(1, min(get_int(db, "upload_image_max_mb", 8), 8))
     if size > max_mb * 1024 * 1024:
-        raise HTTPException(status_code=400, detail=f"图片不能超过 {max_mb}MB")
+        raise HTTPException(
+            status_code=400, detail=f"图片过大，请压缩后再上传（上限 {max_mb}MB）",
+        )
 
     daily_limit = _scaled(get_int(db, "vision_daily_limit", 30), user)
     if daily_limit > 0:
