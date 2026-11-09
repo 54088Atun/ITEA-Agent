@@ -76,7 +76,12 @@ const routes = [
     name: 'profile',
     component: () => import('../views/common/ProfileView.vue'),
   },
-  { path: '/:pathMatch(.*)*', redirect: '/' },
+  {
+    path: '/:pathMatch(.*)*',
+    name: 'not-found',
+    component: () => import('../views/common/NotFoundView.vue'),
+    meta: { public: true },
+  },
 ]
 
 const router = createRouter({

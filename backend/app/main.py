@@ -148,7 +148,8 @@ app.mount("/generated", StaticFiles(directory=str(generated_dir)), name="generat
 # ---------- 健康检查 ----------
 @app.get("/health")
 def health():
-    return {"status": "ok", "model": settings.LLM_MODEL}
+    # 生产健康检查只暴露存活状态,不泄露模型与内部配置
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":

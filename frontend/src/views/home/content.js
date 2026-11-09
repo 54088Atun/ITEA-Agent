@@ -26,13 +26,13 @@ export const hero = reactive({
   eyebrow: '给高校老师和学生的教学助手',
   titleLead: '课程、作业和学情，',
   titleAccent: '放在一个地方。',
-  lead: '老师在这里建课、发作业、看班级情况；学生在这里提问、改错题、练面试。回答会标出内容来自哪份讲义、第几页。',
+  lead: '老师在这里建课、发作业、看班级情况；学生在这里提问、改错题、练面试。有课程资料时，回答会标出内容来自哪份讲义、第几页；没有资料时会明确说明。',
   actions: [
     { label: '教师入口', to: '/login?role=teacher&mode=register', primary: true },
     { label: '学生入口', to: '/login?role=student&mode=register', primary: false },
   ],
   note: '校内账号可以直接登录',
-  features: ['答案标出处', '操作先确认', '只看自己的课'],
+  features: ['回答标来源', '操作先确认', '只看自己的课'],
   preview: {
     course: '数据结构 · 助教答疑',
     level: '信息级别：内部',
@@ -58,8 +58,8 @@ export const hero = reactive({
 export const facts = reactive([
   { value: '4', unit: '级', label: '内容分级', hint: '公开、内部、敏感、机密' },
   { value: '12', unit: '类', label: '操作要确认', hint: '发布、关闭、批改都在内' },
-  { value: '100', unit: '%', label: '回答标出处', hint: '能翻到讲义第几页' },
-  { value: '本地', unit: '', label: '识别可选本机', hint: '图片和语音都能本地处理' },
+  { value: '有据可查', unit: '', label: '回答标来源', hint: '引用课程资料时标注文件与片段' },
+  { value: '按需', unit: '', label: '多模态可配置', hint: '识图/语音按部署能力开启' },
 ])
 
 export const roles = reactive([
@@ -118,9 +118,9 @@ export const showcase = reactive({
       tag: '答疑',
       icon: 'ChatDotRound',
       title: '学生问的问题，先查这门课',
-      desc: '它会翻这门课的讲义和做题记录，再回答。答案下面标了出处，可以点回原文。',
-      metric: '答案带出处',
-      alt: '学生在笔记本上查看助教回答，回答底部标注参考来源页码',
+      desc: '有课程资料时，它会翻讲义和做题记录再回答，并标注来源；没有资料时会明确说明。',
+      metric: '有资料才标来源',
+      alt: '学生在笔记本上查看助教回答，引用资料时底部标注来源',
       image: showcaseImage(
         'editorial photograph of a university student studying with a laptop showing a tutoring chat interface, textbooks and notes on a desk, warm desk lamp light, shallow depth of field, calm navy and cream palette, realistic, no readable text',
       ),
@@ -185,9 +185,9 @@ export const flow = reactive({
       key: 'answer',
       index: '04',
       title: '回答',
-      summary: '边写边显示，结尾标出处',
-      detail: '答案一边生成一边显示，最后附上参考来源。断网了可以回来接着看，重新问也不会重复记录。',
-      sample: '给出解析 → 附「第 12 页」→ 标注 AI 辅助参考',
+      summary: '边写边显示，引用资料时标来源',
+      detail: '答案一边生成一边显示，有课程资料时附上参考来源。断网了可以回来接着看，重新问也不会重复记录。',
+      sample: '给出解析 → 有资料时附来源片段 → 标注 AI 辅助参考',
       icon: 'Document',
     },
   ],
@@ -215,8 +215,8 @@ export const capabilities = reactive([
   {
     icon: 'Picture',
     title: '图片与语音',
-    desc: '一次传几张图、直接粘贴截图、按着说话都行，手写和公式也能认。',
-    tag: '三种输入',
+    desc: '部署开启识图/语音后，可传图、粘贴截图或直接说话；未开启时入口会自动禁用。',
+    tag: '按部署能力',
   },
   {
     icon: 'Connection',
@@ -268,7 +268,7 @@ export const scenes = reactive([
 export const faqs = reactive([
   {
     q: '和直接用聊天工具有什么不一样？',
-    a: '聊天工具不知道你教哪门课、班里谁没交作业。它会先去查这些数据，回答下面还标了出处；发布作业、确认成绩这类操作，会先让你确认。',
+    a: '聊天工具不知道你教哪门课、班里谁没交作业。它会先去查这些数据，有资料时在回答下面标出来源；发布作业、确认成绩这类操作，会先让你确认。',
   },
   {
     q: '学校要单独部署吗？',
