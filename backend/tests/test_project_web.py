@@ -134,7 +134,9 @@ def test_extract_text_skips_script_and_returns_title():
     assert ".x{}" not in result["text"]
 
 
-def test_tools_are_exposed_by_role():
+def test_tools_are_exposed_by_role(monkeypatch):
+    # 本用例验证角色矩阵,联网搜索按已配置处理
+    monkeypatch.setattr(web_access, "web_search_enabled", lambda: True)
     admin_tools = {item["name"] for item in available_tools("admin")}
     teacher_tools = {item["name"] for item in available_tools("teacher")}
     student_tools = {item["name"] for item in available_tools("student")}

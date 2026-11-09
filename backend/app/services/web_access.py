@@ -101,6 +101,16 @@ def _search_endpoint(provider: str) -> str:
     return ""
 
 
+def web_search_enabled() -> bool:
+    """联网搜索是否已配置(供工具表动态裁剪)"""
+    provider = (settings.WEB_SEARCH_PROVIDER or "none").strip().lower()
+    return bool(
+        provider not in ("", "none")
+        and (settings.WEB_SEARCH_API_KEY or "").strip()
+        and _search_endpoint(provider)
+    )
+
+
 def search(query: str, top_k: int = 5) -> dict:
     """受控 Web 搜索:必须配置服务商,结果带来源链接"""
     keyword = (query or "").strip()

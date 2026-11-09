@@ -290,11 +290,15 @@ TOOL_SCHEMAS = [
 
 
 def tool_schemas_for_role(role: str) -> list[dict]:
-    """按角色能力矩阵过滤工具 Schema,避免把越权工具暴露给模型"""
+    """按角色能力矩阵过滤工具 Schema,避免把越权/不可用工具暴露给模型"""
     from app.services.capabilities import ROLE_CAPABILITIES
+    from app.services.web_access import web_search_enabled
 
     allowed = set((ROLE_CAPABILITIES.get(role) or {}).get("tools") or [])
-    return [schema for schema in TOOL_SCHEMAS if schema["name"] in allowed]
+    schemas = [schema for schema in TOOL_SCHEMAS if schema["name"] in allowed]
+    if not web_search_enabled():
+        schemas = [schema for schema in schemas if schema["name"] != "web.search"]
+    return schemas
 
 
 def _apply_scope_defaults(name: str, args: dict, state: AgentState,

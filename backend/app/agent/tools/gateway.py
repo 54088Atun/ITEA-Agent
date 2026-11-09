@@ -344,9 +344,13 @@ _SPEC_BY_NAME = {spec.name: spec for spec in TOOL_SPECS}
 
 
 def available_tools(role: str) -> list[dict]:
-    """返回当前角色可用的工具目录,未授权工具不下发"""
+    """返回当前角色可用的工具目录,未授权或当前不可用的工具不下发"""
     allowed = set(ROLE_CAPABILITIES.get(role, {}).get("tools", []))
-    return [spec.to_dict() for spec in TOOL_SPECS if spec.name in allowed]
+    specs = [spec for spec in TOOL_SPECS if spec.name in allowed]
+    from app.services.web_access import web_search_enabled
+    if not web_search_enabled():
+        specs = [spec for spec in specs if spec.name != "web.search"]
+    return [spec.to_dict() for spec in specs]
 
 
 def get_tool_spec(name: str) -> ToolSpec | None:

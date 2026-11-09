@@ -5,6 +5,7 @@ from app.agent.state import AgentState
 from app.agent.llm import llm_invoke
 from app.agent.prompts import load_prompt
 from app.services.answer_guard import check_answer_request
+from app.services.risk_rules import is_teacher_prep, rule_risk
 
 logger = logging.getLogger(__name__)
 
@@ -71,21 +72,31 @@ def _parse_json(text: str) -> dict:
 async def _risk_gate(state: AgentState, latest_msg: str) -> dict | None:
     """模型风控闸门:命中返回风控结论,放行或不可用时返回 None
 
-    风控服务不可用时按放行处理(与 JSON 解析失败口径一致),避免模型抖动
-    导致所有对话被阻断;确定性答案保护已在调用本函数前独立执行。
+    先跑确定性规则:高风险措辞直接拦截;教师/管理员正常备课直接放行,
+    避免把"安排一次 90 分钟课堂"误判为成品教案。LLM 不可用时回退规则库,
+    不再对已知高风险请求静默放行。
     """
+    role = state.get("user_role", "")
+    rule = rule_risk(latest_msg, role)
+    if rule:
+        logger.warning("规则风控命中: %s", rule.get("risk_type"))
+        return rule
+    if is_teacher_prep(latest_msg, role):
+        logger.info("教师备课请求按规则放行")
+        return None
+
     try:
         risk_resp = await llm_invoke([
             {"role": "system", "content": load_prompt("risk_guard")},
-            {"role": "user", "content": f"用户身份:{state['user_role']}\n用户请求:{latest_msg}"},
+            {"role": "user", "content": f"用户身份:{role}\n用户请求:{latest_msg}"},
         ], temperature=0.0)
     except Exception as exc:  # noqa: BLE001
-        logger.error("前置风控调用失败,按放行处理: %s", exc)
-        return None
+        logger.error("前置风控调用失败,回退规则库: %s", exc)
+        return rule_risk(latest_msg, role)
     try:
         risk = _parse_json(risk_resp)
     except ValueError:
-        return None
+        return rule_risk(latest_msg, role)
     if (
         isinstance(risk, dict)
         and risk.get("is_risky")

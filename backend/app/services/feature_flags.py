@@ -8,6 +8,7 @@ from app.models.log import SystemConfig
 from app.services.asr import asr_enabled
 from app.services.capabilities import role_capabilities
 from app.services.vision import vlm_enabled, vision_enabled
+from app.services.web_access import web_search_enabled
 
 FEATURE_DEFAULTS = {
     "feature_image_vision": ("on", "图片识图开关(on/off)"),
@@ -63,6 +64,7 @@ def public_features(db: Session, role: str = "student") -> dict:
         "vision_daily_limit": max(0, get_int(db, "vision_daily_limit", 30)),
         "feature_asr": is_enabled(db, "feature_asr"),
         "asr_ready": is_enabled(db, "feature_asr") and asr_enabled(),
+        "web_search_ready": web_search_enabled(),
         "asr_max_mb": max(1, min(get_int(db, "asr_max_mb", 10), 50)),
         "asr_max_seconds": max(0, get_int(db, "asr_max_seconds", 300)),
         "asr_daily_limit": max(0, get_int(db, "asr_daily_limit", 50)),
