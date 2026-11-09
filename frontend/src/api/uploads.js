@@ -1,15 +1,7 @@
 import http from './http'
 
-/** 图片上传:已配置视觉模型时返回识别文本 */
+/** 图片上传:统一走多图接口(最多 3 张),避免前后端维护两套入口 */
 export const uploadApi = {
-  image(file) {
-    const form = new FormData()
-    form.append('file', file)
-    return http.post('/uploads/image', form, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-      timeout: 120000,
-    })
-  },
   /** 多图上传:一次最多 3 张,返回 {items, vision_enabled} */
   images(files) {
     const form = new FormData()

@@ -2264,7 +2264,8 @@ async function copy(text) {
   max-width: 100%;
   padding: 3px 8px;
   border-radius: var(--r-sm);
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
   color: var(--text-secondary);
   font-size: 11px;
   line-height: 1.4;
@@ -2994,10 +2995,6 @@ async function copy(text) {
 .msg__sources span {
   background: var(--bg-card);
   color: var(--text-secondary);
-  border: 1px solid var(--border);
-}
-.msg__file {
-  background: var(--bg-card);
   border: 1px solid var(--border);
 }
 .msg__who {

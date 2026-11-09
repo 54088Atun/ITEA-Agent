@@ -20,7 +20,7 @@ from starlette.datastructures import Headers, UploadFile
 
 import app.api.uploads as uploads_api
 from app.api.course import list_materials, preview_material
-from app.api.uploads import upload_audio, upload_image
+from app.api.uploads import upload_audio
 from app.core.config import settings
 from app.db.session import Base
 from app.models.classroom import CourseEnrollment
@@ -183,7 +183,7 @@ def test_image_and_audio_uploads_are_screened(monkeypatch, db, tmp_path):
     monkeypatch.setattr(uploads_api, "describe_image", flagged_ocr)
     image = _file(b"\x89PNG\r\n\x1a\nfake", "q.png", "image/png")
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(upload_image(image, user, db))
+        asyncio.run(uploads_api._process_image(image, user, db))
     assert exc.value.status_code == 400
     assert list((tmp_path / "vision" / "1").glob("*")) == []
 

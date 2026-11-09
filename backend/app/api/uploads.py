@@ -159,16 +159,6 @@ async def _process_image(file: UploadFile, user: User, db: Session) -> dict:
     }
 
 
-@router.post("/image")
-async def upload_image(
-    file: UploadFile = File(...),
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """上传题目/板书图片;已配置视觉模型时返回识别文本"""
-    return await _process_image(file, user, db)
-
-
 @router.post("/images")
 async def upload_images(
     files: list[UploadFile] = File(...),

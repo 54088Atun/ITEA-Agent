@@ -117,16 +117,17 @@ def test_admin_reflect_does_not_require_course_rag(monkeypatch):
     llm.assert_not_called()
 
 
-def test_admin_reflect_keeps_ai_tag_check(monkeypatch):
+def test_admin_reflect_appends_ai_tag_without_rewrite(monkeypatch):
+    """缺标注时确定性补齐即可,不再调用模型复核或触发重写"""
     monkeypatch.setattr(
         "app.agent.nodes.reflect.llm_invoke",
-        AsyncMock(return_value='{"passed": true}'),
+        AsyncMock(side_effect=AssertionError("缺标注不应触发 LLM 复核")),
     )
 
     result = asyncio.run(reflect_node(_state(final_output="只读平台解读")))
 
-    assert result["reflection_passed"] is False
-    assert "标识" in result["reflection_notes"]
+    assert result["reflection_passed"] is True
+    assert AI_TAG in result["final_output"]
 
 
 def test_admin_node_queries_data_via_tools_instead_of_snapshot(monkeypatch):

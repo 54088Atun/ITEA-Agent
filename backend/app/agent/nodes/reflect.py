@@ -80,6 +80,18 @@ async def reflect_node(state: AgentState) -> dict:
         require_rag=not (is_admin or not has_course or not retrieval_ready),
     )
 
+    # 仅缺少 AI 标注属于可确定性修复的格式问题:直接补标注,
+    # 不再为一句"少了标签"调用模型复核并触发整段重写(普通概念题成本过高)。
+    if issues == ["输出缺少 [AI 辅助参考] 标识"]:
+        tag = "[AI 辅助参考,请管理员复核]" if is_admin else "[AI 辅助参考,请师生审核]"
+        if AI_TAG not in output:
+            output += f"\n\n{tag}"
+        return {
+            "reflection_passed": True,
+            "reflection_count": count + 1,
+            "final_output": output,
+        }
+
     # ---- 第二道:LLM 深度复核(仅当快检有疑点或专业输出时触发)----
     if issues or rag_context.strip():
         if is_admin:

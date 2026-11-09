@@ -55,7 +55,7 @@
                 <el-link type="primary" :underline="false" @click="forgotVisible = true">忘记密码？</el-link>
               </div>
               <el-button type="primary" size="large" class="auth__submit" :loading="loading" @click="doLogin">
-                登 录
+                登录
               </el-button>
             </el-form>
           </el-tab-pane>
@@ -76,7 +76,7 @@
                 <p class="auth__role-tip">教师账号需由管理员开通</p>
               </el-form-item>
               <el-button type="primary" size="large" class="auth__submit" :loading="loading" @click="doRegister">
-                注 册
+                注册
               </el-button>
             </el-form>
           </el-tab-pane>
