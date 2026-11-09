@@ -551,4 +551,43 @@ async function confirmDuplicate() {
   font-size: var(--fs-xs);
   color: var(--text-secondary);
 }
+
+@media (max-width: 767px) {
+  /* 课程卡在大纲很长时先收成三行，避免一屏只看到一门课 */
+  .course__desc {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  /* 筛选控件占满整行，避免 140/160/240px 的固定宽度在窄屏参差不齐 */
+  .course-filters {
+    gap: var(--sp-2);
+  }
+  .course-filters :deep(.el-input) {
+    width: 100% !important;
+  }
+  /* 生命周期独占一行；学期与审核状态并排，减少一屏筛选占用 */
+  .course-filters :deep(.el-select) {
+    width: calc(50% - var(--sp-1)) !important;
+  }
+  .course-filters :deep(.el-select:first-child) {
+    width: 100% !important;
+  }
+  .course-filters__count {
+    width: 100%;
+  }
+  .page-head__actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--sp-2);
+  }
+  .page-head__actions :deep(.el-button) {
+    width: 100%;
+    margin-left: 0;
+  }
+  .page-head__actions :deep(.el-button--primary) {
+    grid-column: 1 / -1;
+  }
+}
 </style>

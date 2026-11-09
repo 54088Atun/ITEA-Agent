@@ -2814,6 +2814,26 @@ async function copy(text) {
 }
 
 @media (max-width: 600px) {
+  .chat__empty {
+    margin-top: 7vh;
+  }
+  .chat__empty-mark {
+    width: 44px;
+    height: 44px;
+    margin-bottom: 12px;
+    font-size: 20px;
+  }
+  .chat__empty-title {
+    font-size: 20px;
+    line-height: 1.4;
+  }
+  .chat__composer {
+    padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  }
+  /* 16px 可避免 iOS 聚焦输入框时自动放大页面 */
+  .chat__composer :deep(.el-textarea__inner) {
+    font-size: 16px;
+  }
   .chat__composer-foot {
     flex-wrap: wrap;
   }
@@ -3261,5 +3281,34 @@ async function copy(text) {
   .chat__composer { padding: 4px 12px 14px; }
   .chat__chips { grid-template-columns: 1fr; }
   .chat__empty-title { font-size: 22px; }
+}
+
+@media (max-width: 600px) {
+  /* 手机首屏优先露出输入框与推荐问题，空态整体收紧 */
+  .chat__empty {
+    margin-top: 5vh;
+  }
+  .chat__empty-mark {
+    width: 44px;
+    height: 44px;
+    margin-bottom: 12px;
+    font-size: 20px;
+  }
+  .chat__empty-title {
+    font-size: 19px;
+    line-height: 1.45;
+  }
+  .chat__empty-sub {
+    margin-top: 6px;
+    font-size: 12.5px;
+  }
+  .chat__chips {
+    margin-top: 18px;
+    gap: 8px;
+  }
+  .chat__chip {
+    padding: 10px 12px;
+    font-size: 12.5px;
+  }
 }
 </style>

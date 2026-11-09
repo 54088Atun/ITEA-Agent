@@ -1244,4 +1244,24 @@ async function confirmGrade() {
 }
 .grade-item__score { margin: 8px 0 0 16px; display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-xs); }
 .grade__actions { display: flex; gap: var(--sp-2); padding-top: var(--sp-2); }
+
+/* 手机端：6 个操作收成两列，避免按钮独占多行把题库挤到首屏之外 */
+@media (max-width: 767px) {
+  .page-head__actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--sp-2);
+  }
+  .page-head__actions :deep(.el-select) {
+    grid-column: 1 / -1;
+    width: 100% !important;
+  }
+  .page-head__actions :deep(.el-button) {
+    width: 100%;
+    margin-left: 0;
+  }
+  .page-head__actions :deep(.el-button--primary) {
+    grid-column: 1 / -1;
+  }
+}
 </style>

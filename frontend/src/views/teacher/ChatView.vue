@@ -75,4 +75,28 @@ function newSession() {
 <style scoped>
 .chat-container { flex: 1; min-height: 0; }
 .empty-center { height: 100%; display: flex; align-items: center; justify-content: center; }
+
+@media (max-width: 767px) {
+  .page-head__main .page-sub {
+    display: none;
+  }
+  .page-head__actions {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+  .page-head__actions::-webkit-scrollbar {
+    display: none;
+  }
+  .page-head__actions :deep(.el-select) {
+    flex: 1 1 auto;
+    width: auto !important;
+    min-width: 0;
+  }
+  .page-head__actions :deep(.el-button) {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+}
 </style>

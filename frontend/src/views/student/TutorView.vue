@@ -130,4 +130,30 @@ async function join() {
   font-size: var(--fs-xs);
   color: var(--text-secondary);
 }
+
+/* 手机端：对话页优先保证气泡区域高度，工具栏改为单行横向滑动 */
+@media (max-width: 767px) {
+  .page-head__main .page-sub {
+    display: none;
+  }
+  .page-head__actions {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .page-head__actions::-webkit-scrollbar {
+    display: none;
+  }
+  .page-head__actions :deep(.el-select) {
+    flex: 0 0 150px;
+    width: 150px !important;
+  }
+  .page-head__actions :deep(.el-checkbox),
+  .page-head__actions :deep(.el-button) {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+}
 </style>

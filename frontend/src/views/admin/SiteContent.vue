@@ -660,6 +660,18 @@ function previewContact() {
     grid-template-columns: 1fr;
   }
 
+  /* 区块标题与说明改为上下排列，避免标题被挤成两行 */
+  .panel__head {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .panel__hint {
+    width: 100%;
+    margin-left: 0;
+    line-height: 1.5;
+  }
+
   .slide-media {
     flex-direction: column;
   }

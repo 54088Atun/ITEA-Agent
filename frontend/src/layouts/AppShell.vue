@@ -26,10 +26,51 @@
       </div>
     </aside>
 
+    <!-- 移动端导航抽屉：复用同一份菜单，避免窄屏只剩 64px 图标栏 -->
+    <el-drawer
+      v-model="mobileNavOpen"
+      direction="ltr"
+      size="286px"
+      :with-header="false"
+      class="shell-nav-drawer"
+      modal-class="shell-nav-mask"
+    >
+      <div class="nav-drawer">
+        <div class="nav-drawer__brand">
+          <span class="shell__mark">I</span>
+          <span class="nav-drawer__brand-text">
+            <strong>{{ brand }}</strong>
+            <small>{{ brandSub }}</small>
+          </span>
+        </div>
+        <el-menu
+          :default-active="activeMenu"
+          router
+          class="shell__menu nav-drawer__menu"
+          background-color="transparent"
+          text-color="rgba(255,255,255,0.68)"
+          active-text-color="#ffffff"
+          @select="closeMobileNav"
+        >
+          <slot name="nav" />
+        </el-menu>
+        <div class="nav-drawer__foot">
+          <span>{{ roleLabel }}</span>
+          <span>ITEA v1.0</span>
+        </div>
+      </div>
+    </el-drawer>
+
     <div class="shell__main">
       <header class="shell__top">
         <div class="shell__top-left">
-          <slot name="title">{{ pageTitle }}</slot>
+          <el-button
+            class="shell__nav-btn" text circle aria-label="打开导航菜单"
+            @click="mobileNavOpen = true"
+          >
+            <el-icon :size="20"><Menu /></el-icon>
+          </el-button>
+          <span class="shell__top-title"><slot name="title">{{ pageTitle }}</slot></span>
         </div>
         <div class="shell__top-right">
           <slot name="actions" />
@@ -44,7 +85,8 @@
             <el-icon><User /></el-icon>
           </el-button>
           <el-button text class="shell__logout" @click="onLogout">
-            <el-icon><SwitchButton /></el-icon>退出
+            <el-icon><SwitchButton /></el-icon>
+            <span class="shell__logout-text">退出</span>
           </el-button>
         </div>
       </header>
@@ -57,8 +99,9 @@
 </template>
 
 <script setup>
-import { useRouter } from 'vue-router'
-import { User } from '@element-plus/icons-vue'
+import { ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { Menu, User } from '@element-plus/icons-vue'
 import { useUserStore } from '../stores/user'
 
 defineProps({
@@ -70,8 +113,17 @@ defineProps({
   activeMenu: { type: String, default: '' },
 })
 
+const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
+const mobileNavOpen = ref(false)
+
+function closeMobileNav() {
+  mobileNavOpen.value = false
+}
+
+// 移动端抽屉：路由切换后自动收起，避免遮挡新页面
+watch(() => route.path, closeMobileNav)
 
 function onLogout() {
   userStore.logout()
@@ -245,11 +297,26 @@ function onLogout() {
   z-index: 2;
 }
 .shell__top-left {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
   font-family: var(--font-serif);
   font-size: var(--fs-md);
   font-weight: 600;
   color: var(--text-primary);
   letter-spacing: 0.02em;
+}
+.shell__top-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shell__nav-btn {
+  display: none;
+  color: var(--text-primary);
+  flex: 0 0 auto;
 }
 .shell__top-right {
   display: flex;
@@ -311,12 +378,129 @@ function onLogout() {
   .shell__menu {
     padding: var(--sp-3) var(--sp-1);
   }
-  .shell__menu :deep(.el-menu-item span) {
+  /* 仅收起左侧图标栏的文字，抽屉内仍显示完整菜单名 */
+  .shell__side .shell__menu :deep(.el-menu-item span) {
     display: none;
   }
   /* 窄屏保留紧凑个人中心入口,不恢复占宽的完整胶囊 */
   .shell__user-compact {
     display: inline-flex;
   }
+}
+
+/* ===== 手机端：隐藏图标栏，改为抽屉导航 ===== */
+@media (max-width: 767px) {
+  .shell__side {
+    display: none;
+  }
+  .shell__nav-btn {
+    display: inline-flex;
+    margin-left: -4px;
+  }
+  .shell__top {
+    gap: var(--sp-2);
+    padding: 0 var(--sp-3);
+    height: calc(var(--topbar-h) - 6px);
+    flex-basis: calc(var(--topbar-h) - 6px);
+  }
+  .shell__top-left {
+    font-size: var(--fs-base);
+  }
+  .shell__top-right {
+    gap: var(--sp-1);
+  }
+  .shell__logout {
+    padding: 0 var(--sp-2);
+  }
+  .shell__logout-text {
+    display: none;
+  }
+  .shell__user-compact {
+    display: inline-flex;
+  }
+  .shell__content {
+    padding: var(--sp-4) var(--sp-3)
+      calc(var(--sp-6) + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* 抽屉挂在 body 下，需用全局选择器覆盖 Element Plus 默认白底 */
+:global(.shell-nav-drawer) {
+  background: var(--grad-sidebar);
+  max-width: 82vw;
+}
+:global(.shell-nav-drawer .el-drawer__body) {
+  padding: 0;
+  overflow: hidden;
+}
+:global(.shell-nav-mask) {
+  backdrop-filter: blur(2px);
+}
+
+.nav-drawer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  color: #fff;
+}
+.nav-drawer__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: calc(var(--sp-5) + env(safe-area-inset-top, 0px)) var(--sp-5) var(--sp-4);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.nav-drawer__brand-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.3;
+}
+.nav-drawer__brand-text strong {
+  font-size: var(--fs-base);
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+}
+.nav-drawer__brand-text small {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.45);
+  white-space: nowrap;
+}
+.nav-drawer__menu {
+  flex: 1;
+  padding: var(--sp-3) var(--sp-2);
+  overflow-y: auto;
+}
+.nav-drawer__menu :deep(.el-menu-item),
+.nav-drawer__menu :deep(.el-sub-menu__title) {
+  height: 46px;
+  line-height: 46px;
+  margin-bottom: 2px;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-base);
+  color: rgba(255, 255, 255, 0.72);
+}
+.nav-drawer__menu :deep(.el-menu-item.is-active) {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-weight: 600;
+}
+.nav-drawer__menu :deep(.el-sub-menu .el-menu-item) {
+  padding-left: 46px !important;
+  height: 40px;
+  line-height: 40px;
+}
+.nav-drawer__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-3) var(--sp-5)
+    calc(var(--sp-3) + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: rgba(255, 255, 255, 0.4);
 }
 </style>

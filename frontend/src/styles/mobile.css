@@ -1,0 +1,252 @@
+/**
+ * 移动端适配层（<=767px）
+ * 只处理全局骨架与 Element Plus 组件的窄屏表现，桌面端样式保持不变。
+ * 目标：内容不横向溢出、表格可横向滑动、表单/弹窗适配窄屏、触控目标足够大。
+ */
+
+@media (max-width: 767px) {
+  html,
+  body {
+    overflow-x: hidden;
+  }
+  /* 去掉移动端点按时的灰色高亮与双击缩放延迟 */
+  button,
+  a,
+  .el-button,
+  .el-menu-item,
+  .el-checkbox,
+  .el-radio {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+
+  /* ===== 页面骨架 ===== */
+  .page {
+    gap: var(--sp-3);
+  }
+  .page--fill {
+    height: calc(
+      100dvh - (var(--topbar-h) - 6px) - var(--sp-4) - var(--sp-6) -
+        env(safe-area-inset-bottom, 0px)
+    );
+    min-height: 420px;
+  }
+  .page-head {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--sp-2);
+  }
+  .page-head__actions {
+    width: 100%;
+    gap: var(--sp-2);
+  }
+  .page-head__actions .el-button {
+    margin-left: 0 !important;
+  }
+  .page-title {
+    font-size: var(--fs-lg);
+  }
+  .page-head__main .back-link {
+    align-self: flex-start;
+    padding-left: 0;
+  }
+  .page-sub {
+    font-size: var(--fs-xs);
+    line-height: var(--lh-base);
+  }
+
+  /* ===== 面板 / 筛选栏 ===== */
+  .panel__head {
+    padding: var(--sp-3);
+  }
+  .panel__body {
+    padding: var(--sp-3);
+  }
+  .filter-bar {
+    padding: var(--sp-3);
+    gap: var(--sp-2);
+  }
+  .filter-bar > .el-input,
+  .filter-bar > .el-select,
+  .filter-bar > .el-date-editor,
+  .filter-bar > .el-tree-select,
+  .filter-bar > .el-cascader {
+    width: 100% !important;
+  }
+  .filter-bar__spacer {
+    display: none;
+  }
+
+  /* ===== KPI 卡组：两列，避免一列拉得过长 ===== */
+  .kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--sp-2);
+  }
+  .kpi {
+    padding: var(--sp-3);
+  }
+  /* 奇数个指标时，最后一张通栏，避免右侧留半格空白 */
+  .kpi-grid > .kpi:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+  .kpi__value {
+    font-size: var(--fs-xl);
+  }
+  .kpi__hint {
+    line-height: 1.45;
+  }
+
+  /* ===== 表单：标签置顶，输入框占满 ===== */
+  /* iOS 对 <16px 的输入框会在聚焦时自动放大页面，这里统一到 16px 避免“点一下就缩放” */
+  .el-input__inner,
+  .el-textarea__inner,
+  .el-select__selected-item,
+  .el-select__placeholder,
+  .el-input__inner::placeholder {
+    font-size: 16px !important;
+  }
+  .el-form:not(.el-form--inline) .el-form-item {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    margin-bottom: var(--sp-4);
+  }
+  .el-form:not(.el-form--inline) .el-form-item__label {
+    width: 100% !important;
+    justify-content: flex-start;
+    padding: 0 0 var(--sp-1);
+    line-height: 1.5;
+  }
+  .el-form:not(.el-form--inline) .el-form-item__content {
+    margin-left: 0 !important;
+  }
+  /* 多行文本域的字数统计会压住最后一行文字，手机端直接隐藏（maxlength 仍生效） */
+  .el-textarea .el-input__count {
+    display: none;
+  }
+  .el-form--inline .el-form-item {
+    margin-right: var(--sp-2);
+    margin-bottom: var(--sp-2);
+  }
+
+  /* ===== 弹窗 / 抽屉 / 消息 ===== */
+  .el-dialog {
+    --el-dialog-margin-top: 6vh;
+    width: calc(100vw - 24px) !important;
+    max-width: 560px;
+  }
+  .el-dialog__header {
+    padding: var(--sp-4) var(--sp-4) var(--sp-2);
+  }
+  .el-dialog__body {
+    padding: var(--sp-4);
+  }
+  .el-dialog__footer {
+    padding: var(--sp-2) var(--sp-4) var(--sp-4);
+  }
+  .el-dialog__footer .el-button {
+    min-height: 38px;
+  }
+  .el-drawer {
+    max-width: 92vw;
+  }
+  .el-message-box {
+    width: calc(100vw - 32px) !important;
+    max-width: 420px;
+  }
+  .el-message {
+    max-width: calc(100vw - 32px);
+  }
+
+  /* ===== 表格：收窄列内边距，保留横向滑动 ===== */
+  .el-table {
+    font-size: var(--fs-xs);
+  }
+  .el-table th.el-table__cell,
+  .el-table td.el-table__cell {
+    padding: 6px 0;
+  }
+  .el-table .cell {
+    padding: 0 var(--sp-2);
+    line-height: 1.5;
+  }
+  .el-table__body-wrapper {
+    -webkit-overflow-scrolling: touch;
+  }
+  /* 空表格提示默认只占 50% 宽，手机上会被拆成很多短行 */
+  .el-table__empty-text {
+    width: 100% !important;
+    padding: 0 4px;
+    line-height: 1.7 !important;
+  }
+  /* 手机屏幕放不下「固定操作列」：取消吸附，让所有列一起横向滚动，
+     否则 300px 的操作列会盖住姓名/邮箱等主信息 */
+  .el-table .el-table-fixed-column--right,
+  .el-table .el-table-fixed-column--left {
+    position: static !important;
+    right: auto !important;
+    left: auto !important;
+    box-shadow: none !important;
+  }
+  .panel:has(.el-table) {
+    overflow-x: auto;
+  }
+
+  /* ===== 分页 / 标签页 ===== */
+  .el-pagination {
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: var(--sp-2);
+  }
+  .el-pagination__sizes,
+  .el-pagination__jump {
+    display: none !important;
+  }
+  .el-tabs__header {
+    margin-bottom: var(--sp-3);
+  }
+  .el-tabs__item {
+    padding: 0 var(--sp-3);
+    font-size: var(--fs-sm);
+  }
+
+  /* ===== 其他通用内容 ===== */
+  .section-title {
+    font-size: var(--fs-sm);
+  }
+  .empty-state {
+    padding: var(--sp-7) var(--sp-3);
+  }
+  .md-body {
+    font-size: var(--fs-base);
+  }
+  .md-body pre {
+    padding: var(--sp-3);
+    font-size: var(--fs-xs);
+  }
+  .md-body table {
+    display: block;
+    overflow-x: auto;
+  }
+  .md-body .timeline {
+    padding-left: var(--sp-3);
+  }
+
+  /* 触控目标：主要操作按钮不低于 38px，便于拇指点击 */
+  .page-head__actions .el-button,
+  .filter-bar .el-button {
+    min-height: 38px;
+  }
+}
+
+@media (max-width: 480px) {
+  .el-dialog {
+    --el-dialog-margin-top: 4vh;
+  }
+  .kpi__label {
+    font-size: 11px;
+  }
+  .kpi__value {
+    font-size: var(--fs-lg);
+  }
+}
