@@ -6,6 +6,7 @@
  * - 网络错误与 5xx 可恢复;401/403 及其余确定性 4xx 不自动恢复;
  * - 恢复使用同一 request_id,总预算 30 秒(最多轮询 15 次),退避上限 5 秒。
  */
+import { refreshAccessToken } from '../api/token.js'
 
 export const RECOVERY_BUDGET_MS = 30_000
 export const MAX_RECOVERY_ATTEMPTS = 15
@@ -61,17 +62,25 @@ export function ssePost(url, body, handlers = {}) {
   const controller = new AbortController()
   const token = localStorage.getItem('itea_token')
 
+  const send = (bearer) => fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
+    },
+    body: JSON.stringify(body),
+    signal: controller.signal,
+  })
+
   ;(async () => {
     try {
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      })
+      let resp = await send(token)
+
+      // 访问令牌过期:先续期再重试一次(request_id 不变,可安全复用)
+      if (resp.status === 401) {
+        const refreshed = await refreshAccessToken().catch(() => '')
+        if (refreshed) resp = await send(refreshed)
+      }
 
       if (!resp.ok) {
         const detail = await resp.json().catch(() => ({}))

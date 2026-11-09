@@ -1,36 +1,11 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
+import { refreshAccessToken } from './token.js'
 
 const http = axios.create({
   baseURL: '/api',
   timeout: 30000,
 })
-
-// 续期专用实例:不走下面的拦截器,避免 401 递归
-const refreshClient = axios.create({ baseURL: '/api', timeout: 10000 })
-let refreshing = null
-
-/** 用 HttpOnly 刷新令牌换新访问令牌;并发请求共用同一个续期过程 */
-function refreshToken() {
-  if (!refreshing) {
-    refreshing = refreshClient
-      .post('/auth/refresh')
-      .then((resp) => {
-        const token = resp.data?.access_token
-        if (token) {
-          localStorage.setItem('itea_token', token)
-          if (resp.data?.user) {
-            localStorage.setItem('itea_user', JSON.stringify(resp.data.user))
-          }
-        }
-        return token || ''
-      })
-      .finally(() => {
-        refreshing = null
-      })
-  }
-  return refreshing
-}
 
 // 请求拦截:注入 JWT
 http.interceptors.request.use((config) => {
@@ -59,7 +34,7 @@ http.interceptors.response.use(
       && !config._retried
     ) {
       try {
-        const token = await refreshToken()
+        const token = await refreshAccessToken()
         if (token) {
           config._retried = true
           config.headers = config.headers || {}
