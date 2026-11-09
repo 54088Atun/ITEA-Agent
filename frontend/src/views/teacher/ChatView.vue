@@ -6,12 +6,6 @@
         <p class="page-sub">课程、班级、作业、考试与教学资料，都可以在这里统一查询和处理</p>
       </div>
       <div class="page-head__actions">
-        <el-select
-          v-model="courseId" clearable placeholder="选择课程（可选）"
-          filterable style="width: 220px" @change="onCourseChange"
-        >
-          <el-option v-for="c in courses" :key="c.id" :label="c.name" :value="c.id" />
-        </el-select>
         <el-button @click="newSession">
           <el-icon><Plus /></el-icon> 新对话
         </el-button>
@@ -24,7 +18,7 @@
         :key="sessionKey"
         welcome="你好!我是智能助手,可以查询你的课程、班级、作业与考试,也能帮你修改课程信息、建班、发作业、录入题目等。"
         placeholder="例如:我有哪些班级?帮我给这个班加一条公告;为课程新增一道单选题..."
-        :course-id="courseId || null"
+        :course-id="null"
         branch="teacher"
         :suggestions="suggestions"
       />
@@ -33,12 +27,9 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref } from 'vue'
 import ChatWindow from '../../components/ChatWindow.vue'
-import { teacherApi } from '../../api/teacher'
 
-const courses = ref([])
-const courseId = ref(null)
 const sessionKey = ref(0)
 const chatRef = ref()
 
@@ -47,19 +38,6 @@ const suggestions = [
   '帮我给课程新建一个班级',
   '查看这个班最近的作业提交情况',
 ]
-
-onMounted(async () => {
-  try {
-    // /teacher/courses 直接返回数组
-    const data = await teacherApi.courses()
-    courses.value = Array.isArray(data) ? data : []
-    if (courses.value.length) courseId.value = courses.value[0].id
-  } catch { /* 拦截器已提示 */ }
-})
-
-function onCourseChange() {
-  newSession()
-}
 
 function newSession() {
   sessionKey.value++ // 销毁重建 ChatWindow,清空会话

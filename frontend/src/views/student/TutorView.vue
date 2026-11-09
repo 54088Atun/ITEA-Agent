@@ -3,54 +3,26 @@
     <div class="page-head">
       <div class="page-head__main">
         <h2 class="page-title">智能助手</h2>
-        <p class="page-sub">课程学习、班级事务、作业考试，都可以直接问我；选择课程后会结合该课程资料与你的学情</p>
+        <p class="page-sub">课程学习、班级事务、作业考试，都可以直接问我</p>
       </div>
       <div class="page-head__actions">
-        <el-select
-          v-model="courseId"
-          placeholder="选择课程（可选）"
-          clearable
-          filterable
-          style="width: 220px"
-          @change="newSession"
-        >
-          <el-option v-for="c in courses" :key="c.id" :label="c.name" :value="c.id" />
-        </el-select>
         <el-button @click="joinVisible = true">
           <el-icon><UserFilled /></el-icon> 加入班级
         </el-button>
-        <el-checkbox
-          v-model="reviewSubmit"
-          :disabled="!courseId"
-          title="勾选后，发送的题目与解析会作为错题写入学情并安排复习"
-        >
-          记录为错题
-        </el-checkbox>
         <el-button @click="newSession">
           <el-icon><Plus /></el-icon> 新对话
         </el-button>
       </div>
     </div>
 
-    <el-alert
-      v-if="!courses.length"
-      class="tip"
-      type="info"
-      :closable="false"
-      show-icon
-      title="还没有课程：输入教师提供的课程码加入后，就能看到该班级课程与资料。"
-    />
-
     <div class="chat-container">
       <ChatWindow
         :key="sessionKey"
         welcome="你好!我是你的智能助手。可以问我学习问题，也可以查询班级、作业和考试，还能帮你提交作业。"
         placeholder="例如:二叉树的前序遍历和中序遍历有什么区别?或者贴上你的报错代码..."
-        :course-id="courseId || null"
+        :course-id="null"
         branch="tutor"
-        :review-submit="reviewSubmit"
         :suggestions="suggestions"
-        @sent="reviewSubmit = false"
       />
     </div>
 
@@ -66,17 +38,12 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import ChatWindow from '../../components/ChatWindow.vue'
-import { courseApi } from '../../api/course'
 import { codeApi } from '../../api/codes'
 
-const courses = ref([])
-const courseId = ref(null)
 const sessionKey = ref(0)
-// 勾选后本次提问按错题提交处理(服务端强制走复盘分支并写入学情)
-const reviewSubmit = ref(false)
 
 const joinVisible = ref(false)
 const joining = ref(false)
@@ -87,16 +54,6 @@ const suggestions = [
   '帮我看看这周有哪些考试',
   '这个班里有我的课代表吗',
 ]
-
-onMounted(loadCourses)
-
-async function loadCourses() {
-  try {
-    // /course/list 直接返回数组(已按选课关系过滤)
-    const data = await courseApi.list()
-    courses.value = Array.isArray(data) ? data : []
-  } catch { /* 拦截器已提示 */ }
-}
 
 function newSession() {
   sessionKey.value++
@@ -111,11 +68,6 @@ async function join() {
     ElMessage.success(`已加入班级：${data.class_name}`)
     joinVisible.value = false
     inviteCode.value = ''
-    await loadCourses()
-    if (data.course_id) {
-      courseId.value = data.course_id
-      newSession()
-    }
   } catch { /* 拦截器已提示 */ } finally {
     joining.value = false
   }
