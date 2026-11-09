@@ -1,6 +1,13 @@
 """认证相关请求/响应模型"""
 from pydantic import BaseModel, EmailStr, Field, field_validator
-from typing import Optional
+from typing import Literal, Optional
+
+
+def check_password_strength(value: str) -> str:
+    """密码强度:至少 8 位且同时包含字母和数字(注册/重置共用)"""
+    if not any(ch.isalpha() for ch in value) or not any(ch.isdigit() for ch in value):
+        raise ValueError("密码需至少 8 位，且同时包含字母和数字")
+    return value
 
 
 class RegisterRequest(BaseModel):
@@ -8,15 +15,14 @@ class RegisterRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=50)
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
+    email_code: Optional[str] = Field(None, max_length=10)
     captcha_id: Optional[str] = None
     captcha_code: Optional[str] = None
 
     @field_validator("password")
     @classmethod
     def _check_password_strength(cls, value: str) -> str:
-        if not any(ch.isalpha() for ch in value) or not any(ch.isdigit() for ch in value):
-            raise ValueError("密码需至少 8 位，且同时包含字母和数字")
-        return value
+        return check_password_strength(value)
 
 
 class LoginRequest(BaseModel):
@@ -24,6 +30,29 @@ class LoginRequest(BaseModel):
     password: str
     captcha_id: Optional[str] = None
     captcha_code: Optional[str] = None
+
+
+class EmailCodeRequest(BaseModel):
+    email: EmailStr
+    purpose: Literal["register", "reset_password"]
+    captcha_id: Optional[str] = None
+    captcha_code: Optional[str] = None
+
+
+class EmailVerifyRequest(BaseModel):
+    email: EmailStr
+    code: str = Field(..., min_length=4, max_length=10)
+
+
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+    code: str = Field(..., min_length=4, max_length=10)
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def _check_password_strength(cls, value: str) -> str:
+        return check_password_strength(value)
 
 
 class UserOut(BaseModel):

@@ -25,4 +25,5 @@ class User(Base):
         Integer, nullable=False, default=0, server_default="0",
         comment="令牌版本号,改密/登出全部设备时递增使旧 JWT 失效",
     )
+    email_verified_at = Column(DateTime, nullable=True, comment="邮箱验证通过时间")
     created_at = Column(DateTime, server_default=func.now())

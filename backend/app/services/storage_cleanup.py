@@ -111,10 +111,39 @@ def cleanup_uploads(
     return stats
 
 
+def cleanup_email_codes(
+    now: Optional[datetime] = None, retention_days: int = 7,
+) -> int:
+    """删除过期的邮箱验证码记录(默认保留 7 天,便于排障回溯)"""
+    from app.db.session import SessionLocal
+    from app.models.email_verification import EmailVerificationCode
+
+    cutoff = (now or datetime.utcnow()) - timedelta(days=max(1, retention_days))
+    db = SessionLocal()
+    try:
+        deleted = (
+            db.query(EmailVerificationCode)
+            .filter(EmailVerificationCode.created_at < cutoff)
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+        return int(deleted or 0)
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        logger.warning("邮箱验证码清理失败: %s", exc)
+        return 0
+    finally:
+        db.close()
+
+
 def cleanup_uploads_task() -> dict:
     """调度器入口:异常不外抛,避免拖垮后台任务"""
     try:
-        return cleanup_uploads()
+        stats = cleanup_uploads()
     except Exception as exc:  # noqa: BLE001
         logger.error("上传文件清理失败: %s", exc)
         return {"deleted": 0, "freed_bytes": 0, "by_category": {}, "error": str(exc)}
+    removed_codes = cleanup_email_codes()
+    if removed_codes:
+        logger.info("邮箱验证码清理完成: %s 条", removed_codes)
+    return stats

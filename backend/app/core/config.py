@@ -30,6 +30,30 @@ class Settings(BaseSettings):
     LOGIN_IP_MAX_FAILURES: int = 20
     LOGIN_IP_WINDOW_SECONDS: int = 300
 
+    # 邮件(阿里云 DirectMail);provider=none 时开发环境把验证码写入日志
+    MAIL_PROVIDER: str = "none"  # none/aliyun
+    ALIYUN_MAIL_ACCESS_KEY_ID: str = ""
+    ALIYUN_MAIL_ACCESS_KEY_SECRET: str = ""
+    ALIYUN_MAIL_ENDPOINT: str = "dm.aliyuncs.com"
+    ALIYUN_MAIL_REGION_ID: str = "cn-hangzhou"
+    ALIYUN_MAIL_ACCOUNT_NAME: str = ""
+    ALIYUN_MAIL_ADDRESS_TYPE: int = 1
+    ALIYUN_MAIL_FROM_ALIAS: str = "ITEA教学助手"
+    # 控制台已验证的回信地址;留空则不启用回信地址
+    ALIYUN_MAIL_REPLY_TO: str = ""
+    # 控制台审核通过的邮件模板 ID;留空时回退为直接发送 HTML 正文
+    ALIYUN_MAIL_TEMPLATE_REGISTER: str = ""
+    ALIYUN_MAIL_TEMPLATE_RESET_PASSWORD: str = ""
+    ALIYUN_MAIL_TIMEOUT: int = 8
+
+    # 邮箱验证策略:开启后未验证账号禁止登录
+    REQUIRE_EMAIL_VERIFICATION: bool = True
+    EMAIL_CODE_TTL_SECONDS: int = 600
+    EMAIL_CODE_RESEND_SECONDS: int = 60
+    EMAIL_CODE_MAX_ATTEMPTS: int = 5
+    EMAIL_CODE_MAX_PER_HOUR_EMAIL: int = 5
+    EMAIL_CODE_MAX_PER_HOUR_IP: int = 20
+
     # LLM(DeepSeek,兼容 OpenAI 接口格式)
     LLM_API_BASE: str = "https://api.deepseek.com"
     LLM_API_KEY: str = ""  # 必须从 .env 或环境变量注入,禁止硬编码
@@ -149,9 +173,24 @@ class Settings(BaseSettings):
             invalid_fields.append("DATABASE_URL")
         if "*" in self.cors_origins:
             invalid_fields.append("CORS_ALLOW_ORIGINS")
+        if self.REQUIRE_EMAIL_VERIFICATION and not self.mail_configured:
+            invalid_fields.append("MAIL_PROVIDER/ALIYUN_MAIL_*")
         if invalid_fields:
             fields = ", ".join(invalid_fields)
             raise RuntimeError(f"生产环境必须显式配置非空且非默认值: {fields}")
+
+    @property
+    def mail_configured(self) -> bool:
+        """邮件通道是否具备发信条件(阿里云 DirectMail)"""
+        if (self.MAIL_PROVIDER or "").strip().lower() != "aliyun":
+            return False
+        required = (
+            self.ALIYUN_MAIL_ACCESS_KEY_ID,
+            self.ALIYUN_MAIL_ACCESS_KEY_SECRET,
+            self.ALIYUN_MAIL_ACCOUNT_NAME,
+            self.ALIYUN_MAIL_ENDPOINT,
+        )
+        return all((item or "").strip() for item in required)
 
     @property
     def cors_origins(self) -> list[str]:

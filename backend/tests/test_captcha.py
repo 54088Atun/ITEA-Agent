@@ -111,6 +111,7 @@ def test_captcha_endpoint_reports_required(monkeypatch):
     disabled = auth_api.get_captcha()
     assert disabled == {
         "required": False, "captcha_id": "", "image": "", "expires_in": 0,
+        "email_verification_required": False,
     }
 
 

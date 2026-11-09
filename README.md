@@ -155,6 +155,20 @@ npm run dev -- --host 127.0.0.1
 
 完整的上下文预算、上传文件清理、项目自检、联网白名单及多模态配置见 `backend/.env.example` 和 `backend/app/core/config.py`。
 
+### 邮箱验证与邮件通道
+
+注册、未验证账号激活与自助找回密码都依赖邮箱验证码。开发环境可保持 `MAIL_PROVIDER=none`（验证码会写入后端日志便于联调）；生产环境必须配置阿里云邮件推送：
+
+```dotenv
+MAIL_PROVIDER=aliyun
+ALIYUN_MAIL_ACCESS_KEY_ID=你的RAM子账号AccessKeyId
+ALIYUN_MAIL_ACCESS_KEY_SECRET=你的RAM子账号AccessKeySecret
+ALIYUN_MAIL_ACCOUNT_NAME=noreply@mail.itea-agent.xyz
+REQUIRE_EMAIL_VERIFICATION=true
+```
+
+上线前需在阿里云控制台完成发信域名 MX/SPF/DKIM 解析、发信地址验证，并为 RAM 子账号授予最小发信权限。临时回滚可将 `REQUIRE_EMAIL_VERIFICATION` 置为 `false`（登录不再拦截未验证账号）。
+
 ## 测试与构建
 
 后端完整测试：

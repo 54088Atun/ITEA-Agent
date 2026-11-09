@@ -416,7 +416,8 @@ def test_create_user_audit_failure_rolls_back_real_transaction(monkeypatch):
                 "avatar_url VARCHAR(255), "
                 "password_hash VARCHAR(255) NOT NULL, "
                 "status VARCHAR(20) NOT NULL, "
-                "token_version INTEGER NOT NULL DEFAULT 0, created_at DATETIME)"
+                "token_version INTEGER NOT NULL DEFAULT 0, "
+                "email_verified_at DATETIME, created_at DATETIME)"
             )
         monkeypatch.setattr(admin_api, "hash_password", lambda _: "hash")
         monkeypatch.setattr(admin_api, "_audit", MagicMock(return_value=None))

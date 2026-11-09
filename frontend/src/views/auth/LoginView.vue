@@ -105,6 +105,29 @@
                   <el-button v-else text :loading="captchaLoading" @click="loadCaptcha">获取验证码</el-button>
                 </div>
               </el-form-item>
+              <el-form-item v-if="emailVerification.required" label="邮箱验证码">
+                <div class="auth__code">
+                  <el-input
+                    v-model="regForm.emailCode"
+                    placeholder="6 位验证码"
+                    size="large"
+                    maxlength="6"
+                  />
+                  <el-button
+                    :loading="regCodeLoading"
+                    :disabled="regCountdown > 0"
+                    @click="sendRegCode"
+                  >
+                    {{ regCountdown > 0 ? `${regCountdown}s 后重发` : '发送验证码' }}
+                  </el-button>
+                </div>
+                <p v-if="regMaskedEmail" class="auth__code-tip">
+                  验证码已发送至 {{ regMaskedEmail }}，10 分钟内有效
+                </p>
+                <p v-else class="auth__code-tip">
+                  发送验证码会消耗当前图形验证码，提交前请重新输入
+                </p>
+              </el-form-item>
               <el-form-item label="身份">
                 <el-tag type="info" size="large">学生账号</el-tag>
                 <p class="auth__role-tip">教师账号需由管理员开通</p>
@@ -116,13 +139,115 @@
           </el-tab-pane>
         </el-tabs>
 
-        <el-dialog v-model="forgotVisible" title="找回密码" width="380px">
-          <p class="auth__forgot-text">
-            出于账号安全考虑，系统暂不提供自助改密。请使用校园邮箱联系任课教师或系统管理员，
-            由管理员在「用户管理」中重置密码后再登录。
-          </p>
+        <el-dialog v-model="forgotVisible" title="找回密码" width="400px" @closed="resetForgot">
+          <el-form v-if="forgotStep === 1" label-position="top" @submit.prevent>
+            <el-form-item label="邮箱">
+              <el-input
+                v-model="forgotForm.email"
+                placeholder="name@campus.edu"
+                size="large"
+                :prefix-icon="Message"
+              />
+            </el-form-item>
+            <el-form-item v-if="captcha.required" label="图形验证码">
+              <div class="auth__captcha">
+                <el-input v-model="captchaCode" placeholder="请输入图中字符" size="large" maxlength="4" />
+                <img
+                  v-if="captcha.image"
+                  :src="captcha.image"
+                  alt="图形验证码"
+                  class="auth__captcha-img"
+                  title="点击刷新"
+                  @click="loadCaptcha"
+                />
+                <el-button v-else text :loading="captchaLoading" @click="loadCaptcha">获取验证码</el-button>
+              </div>
+            </el-form-item>
+            <el-button
+              type="primary"
+              size="large"
+              class="auth__submit"
+              :loading="forgotSending"
+              :disabled="forgotCountdown > 0"
+              @click="sendResetCode"
+            >
+              {{ forgotCountdown > 0 ? `${forgotCountdown}s 后重发` : '发送验证码' }}
+            </el-button>
+          </el-form>
+
+          <el-form v-else label-position="top" @submit.prevent>
+            <p class="auth__forgot-text">
+              验证码已发送至 {{ forgotMaskedEmail }}，请输入验证码并设置新密码。
+            </p>
+            <el-form-item label="邮箱验证码">
+              <el-input v-model="forgotForm.code" placeholder="6 位验证码" size="large" maxlength="6" />
+            </el-form-item>
+            <el-form-item label="新密码">
+              <el-input
+                v-model="forgotForm.password"
+                type="password"
+                placeholder="至少 8 位，含字母和数字"
+                size="large"
+                show-password
+              />
+            </el-form-item>
+            <el-button
+              type="primary"
+              size="large"
+              class="auth__submit"
+              :loading="forgotSubmitting"
+              @click="submitReset"
+            >
+              重置密码
+            </el-button>
+            <div class="auth__helper auth__helper--left">
+              <el-link type="primary" :underline="false" @click="forgotStep = 1">重新发送验证码</el-link>
+            </div>
+          </el-form>
+        </el-dialog>
+
+        <el-dialog v-model="activateVisible" title="验证邮箱" width="400px" @closed="resetActivate">
+          <el-alert
+            class="auth__error"
+            :title="`账号 ${activateEmail} 尚未完成邮箱验证`"
+            type="warning"
+            :closable="false"
+            show-icon
+          />
+          <el-form label-position="top" @submit.prevent>
+            <el-form-item label="邮箱验证码">
+              <div class="auth__code">
+                <el-input v-model="activateCode" placeholder="6 位验证码" size="large" maxlength="6" />
+                <el-button
+                  :loading="activateSending"
+                  :disabled="activateCountdown > 0"
+                  @click="sendActivateCode"
+                >
+                  {{ activateCountdown > 0 ? `${activateCountdown}s 后重发` : '发送验证码' }}
+                </el-button>
+              </div>
+            </el-form-item>
+            <el-form-item v-if="captcha.required" label="图形验证码">
+              <div class="auth__captcha">
+                <el-input v-model="captchaCode" placeholder="请输入图中字符" size="large" maxlength="4" />
+                <img
+                  v-if="captcha.image"
+                  :src="captcha.image"
+                  alt="图形验证码"
+                  class="auth__captcha-img"
+                  title="点击刷新"
+                  @click="loadCaptcha"
+                />
+                <el-button v-else text :loading="captchaLoading" @click="loadCaptcha">获取验证码</el-button>
+              </div>
+            </el-form-item>
+            <p class="auth__code-tip">先填写图形验证码并发送邮箱验证码，收到后填入上方完成激活。</p>
+          </el-form>
           <template #footer>
-            <el-button type="primary" @click="forgotVisible = false">我知道了</el-button>
+            <el-button @click="activateVisible = false">取消</el-button>
+            <el-button type="primary" :loading="activateSubmitting" @click="submitActivate">
+              激活并登录
+            </el-button>
           </template>
         </el-dialog>
       </div>
@@ -131,7 +256,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Message, Lock, User } from '@element-plus/icons-vue'
@@ -153,12 +278,43 @@ const loginFormRef = ref()
 const regFormRef = ref()
 
 const loginForm = reactive({ email: '', password: '' })
-const regForm = reactive({ name: '', email: '', password: '', role: initialRole })
+const regForm = reactive({ name: '', email: '', password: '', role: initialRole, emailCode: '' })
 const captcha = reactive({ required: false, id: '', image: '' })
 const captchaCode = ref('')
 const captchaLoading = ref(false)
+// 后端邮箱验证开关:关闭时隐藏验证码输入与激活引导
+const emailVerification = reactive({ required: true })
+
+// 注册页邮箱验证码
+const regCodeLoading = ref(false)
+const regCountdown = ref(0)
+const regMaskedEmail = ref('')
+let regTimer = null
+
+// 未验证账号激活
+const activateVisible = ref(false)
+const activateEmail = ref('')
+const activateCode = ref('')
+const activateSending = ref(false)
+const activateSubmitting = ref(false)
+const activateCountdown = ref(0)
+let activateTimer = null
+
+// 找回密码
+const forgotStep = ref(1)
+const forgotForm = reactive({ email: '', code: '', password: '' })
+const forgotSending = ref(false)
+const forgotSubmitting = ref(false)
+const forgotCountdown = ref(0)
+const forgotMaskedEmail = ref('')
+let forgotTimer = null
 
 onMounted(loadCaptcha)
+onUnmounted(() => {
+  clearInterval(regTimer)
+  clearInterval(activateTimer)
+  clearInterval(forgotTimer)
+})
 
 async function loadCaptcha() {
   captchaLoading.value = true
@@ -168,6 +324,9 @@ async function loadCaptcha() {
     captcha.id = data.captcha_id || ''
     captcha.image = data.image || ''
     captchaCode.value = ''
+    if (typeof data.email_verification_required === 'boolean') {
+      emailVerification.required = data.email_verification_required
+    }
   } catch {
     captcha.required = false
     captcha.id = ''
@@ -175,6 +334,24 @@ async function loadCaptcha() {
   } finally {
     captchaLoading.value = false
   }
+}
+
+function startCountdown(target, seconds, previous) {
+  if (previous) clearInterval(previous)
+  target.value = Math.max(1, Number(seconds) || 60)
+  const handle = setInterval(() => {
+    target.value -= 1
+    if (target.value <= 0) clearInterval(handle)
+  }, 1000)
+  return handle
+}
+
+function errorText(err, fallback) {
+  const detail = err?.response?.data?.detail
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail) && detail.length) return detail[0]?.msg || fallback
+  if (!err?.response) return '无法连接服务器，请稍后重试'
+  return fallback
 }
 
 function captchaPayload() {
@@ -223,6 +400,20 @@ async function doLogin() {
     // 登录接口错误由页面内提示,不走全局弹窗,避免重复打扰
     const status = err?.response?.status
     const detail = err?.response?.data?.detail
+    const errorCode = err?.response?.headers?.['x-error-code']
+    // 邮箱未验证:就地展开激活面板,不视为普通登录失败
+    if (
+      status === 403
+      && (errorCode === 'email_unverified'
+        || (typeof detail === 'string' && detail.includes('尚未验证')))
+    ) {
+      activateEmail.value = loginForm.email
+      activateCode.value = ''
+      activateVisible.value = true
+      loginError.value = typeof detail === 'string' ? detail : '邮箱尚未验证，请先完成邮箱验证'
+      await refreshCaptchaIfNeeded()
+      return
+    }
     if (status === 401) {
       loginError.value = '账号或密码错误，请重新输入'
     } else if (status === 403) {
@@ -248,17 +439,168 @@ async function doRegister() {
     ElMessage.warning('请输入图形验证码')
     return
   }
+  if (emailVerification.required && !regForm.emailCode.trim()) {
+    ElMessage.warning('请输入邮箱验证码')
+    return
+  }
   loading.value = true
   try {
-    await userStore.register({ ...regForm, ...captchaPayload() })
+    await userStore.register({
+      name: regForm.name,
+      email: regForm.email,
+      password: regForm.password,
+      role: regForm.role,
+      email_code: regForm.emailCode.trim(),
+      ...captchaPayload(),
+    })
     ElMessage.success('注册成功,已自动登录')
     router.push(userStore.homePath)
-  } catch {
+  } catch (err) {
+    ElMessage.error(errorText(err, '注册失败，请稍后重试'))
     // 注册失败后验证码已消费,刷新一张新的
     await refreshCaptchaIfNeeded()
   } finally {
     loading.value = false
   }
+}
+
+async function sendRegCode() {
+  if (!regForm.email) {
+    ElMessage.warning('请先填写邮箱')
+    return
+  }
+  if (captcha.required && !captchaCode.value.trim()) {
+    ElMessage.warning('请先输入图形验证码')
+    return
+  }
+  regCodeLoading.value = true
+  try {
+    const data = await authApi.sendEmailCode({
+      email: regForm.email,
+      purpose: 'register',
+      ...captchaPayload(),
+    })
+    regMaskedEmail.value = data.masked_email || regForm.email
+    regTimer = startCountdown(regCountdown, data.resend_after, regTimer)
+    ElMessage.success('验证码已发送，请查收邮箱')
+  } catch (err) {
+    ElMessage.error(errorText(err, '发送失败，请稍后重试'))
+  } finally {
+    regCodeLoading.value = false
+    // 发码消耗了图形验证码,提交注册前需要重新输入
+    await refreshCaptchaIfNeeded()
+  }
+}
+
+async function sendActivateCode() {
+  if (captcha.required && !captchaCode.value.trim()) {
+    ElMessage.warning('请先输入图形验证码')
+    return
+  }
+  activateSending.value = true
+  try {
+    const data = await authApi.sendEmailCode({
+      email: activateEmail.value,
+      purpose: 'register',
+      ...captchaPayload(),
+    })
+    activateTimer = startCountdown(activateCountdown, data.resend_after, activateTimer)
+    ElMessage.success(`验证码已发送至 ${data.masked_email || activateEmail.value}`)
+  } catch (err) {
+    ElMessage.error(errorText(err, '发送失败，请稍后重试'))
+  } finally {
+    activateSending.value = false
+    await refreshCaptchaIfNeeded()
+  }
+}
+
+async function submitActivate() {
+  if (!activateCode.value.trim()) {
+    ElMessage.warning('请输入邮箱验证码')
+    return
+  }
+  activateSubmitting.value = true
+  try {
+    const data = await authApi.verifyEmail({
+      email: activateEmail.value,
+      code: activateCode.value.trim(),
+    })
+    userStore.setAuth(data.access_token, data)
+    activateVisible.value = false
+    loginError.value = ''
+    ElMessage.success('邮箱验证成功')
+    router.push(userStore.homePath)
+  } catch (err) {
+    ElMessage.error(errorText(err, '验证码错误或已过期'))
+  } finally {
+    activateSubmitting.value = false
+  }
+}
+
+function resetActivate() {
+  activateCode.value = ''
+}
+
+async function sendResetCode() {
+  if (!forgotForm.email) {
+    ElMessage.warning('请输入邮箱')
+    return
+  }
+  if (captcha.required && !captchaCode.value.trim()) {
+    ElMessage.warning('请先输入图形验证码')
+    return
+  }
+  forgotSending.value = true
+  try {
+    const data = await authApi.sendEmailCode({
+      email: forgotForm.email,
+      purpose: 'reset_password',
+      ...captchaPayload(),
+    })
+    forgotMaskedEmail.value = data.masked_email || forgotForm.email
+    forgotStep.value = 2
+    forgotTimer = startCountdown(forgotCountdown, data.resend_after, forgotTimer)
+    ElMessage.success('若该邮箱已注册，验证码已发送')
+  } catch (err) {
+    ElMessage.error(errorText(err, '发送失败，请稍后重试'))
+  } finally {
+    forgotSending.value = false
+    await refreshCaptchaIfNeeded()
+  }
+}
+
+async function submitReset() {
+  if (!forgotForm.code.trim()) {
+    ElMessage.warning('请输入邮箱验证码')
+    return
+  }
+  if (!forgotForm.password) {
+    ElMessage.warning('请设置新密码')
+    return
+  }
+  forgotSubmitting.value = true
+  try {
+    await authApi.resetPassword({
+      email: forgotForm.email,
+      code: forgotForm.code.trim(),
+      new_password: forgotForm.password,
+    })
+    ElMessage.success('密码已重置，请使用新密码登录')
+    loginForm.email = forgotForm.email
+    loginForm.password = ''
+    forgotVisible.value = false
+  } catch (err) {
+    ElMessage.error(errorText(err, '验证码错误或已过期'))
+  } finally {
+    forgotSubmitting.value = false
+  }
+}
+
+function resetForgot() {
+  forgotStep.value = 1
+  forgotForm.code = ''
+  forgotForm.password = ''
+  forgotMaskedEmail.value = ''
 }
 </script>
 
@@ -481,6 +823,27 @@ async function doRegister() {
   border-radius: var(--r-sm);
   background: #fff;
   cursor: pointer;
+}
+.auth__code {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+}
+.auth__code :deep(.el-button) {
+  flex: 0 0 auto;
+  min-width: 108px;
+}
+.auth__code-tip {
+  margin-top: 4px;
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+.auth__helper--left {
+  justify-content: flex-start;
+  margin-top: var(--sp-3);
+  margin-bottom: 0;
 }
 .auth__forgot-text {
   font-size: var(--fs-sm);

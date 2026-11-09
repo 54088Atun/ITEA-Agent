@@ -1,8 +1,10 @@
-"""认证路由:注册 / 登录 / 当前用户 / 静态文件鉴权"""
+"""认证路由:注册 / 登录 / 邮箱验证 / 找回密码 / 当前用户 / 静态文件鉴权"""
+import json
 import logging
 import threading
 import time
 from collections import deque
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -17,10 +19,18 @@ from app.core.security import (
 from app.core.deps import get_current_user, user_from_token
 from app.core.log_sanitizer import mask_email
 from app.core.request_context import get_client_ip
+from app.models.log import OperationLog
 from app.models.user import User
-from app.schemas.auth import RegisterRequest, LoginRequest, TokenResponse, UserOut
+from app.schemas.auth import (
+    EmailCodeRequest, EmailVerifyRequest, LoginRequest, PasswordResetRequest,
+    RegisterRequest, TokenResponse, UserOut,
+)
 from app.services.captcha import (
     captcha_required, generate_captcha, verify_captcha,
+)
+from app.services.email_verification import (
+    PURPOSE_REGISTER, PURPOSE_RESET_PASSWORD, assert_can_send, consume_code,
+    issue_code, normalize_email,
 )
 
 logger = logging.getLogger(__name__)
@@ -140,6 +150,11 @@ def _assert_captcha(captcha_id: Optional[str], code: Optional[str]) -> None:
         )
 
 
+def email_verification_required() -> bool:
+    """邮箱验证开关;关闭时不消费验证码、不拦截登录(紧急回滚用)"""
+    return bool(settings.REQUIRE_EMAIL_VERIFICATION)
+
+
 def _set_auth_cookie(response: Response, token: str) -> None:
     response.set_cookie(
         key=AUTH_COOKIE,
@@ -203,10 +218,52 @@ def _issue_session(user: User, response: Response) -> TokenResponse:
 
 @router.get("/captcha")
 def get_captcha():
-    """获取图形验证码;未启用时返回 required=False,前端据此隐藏输入框"""
+    """获取图形验证码;未启用时返回 required=False,前端据此隐藏输入框
+
+    一并下发邮箱验证开关,前端据此决定是否展示验证码输入与激活引导。
+    """
+    email_required = email_verification_required()
     if not captcha_required():
-        return {"required": False, "captcha_id": "", "image": "", "expires_in": 0}
-    return {"required": True, **generate_captcha()}
+        return {
+            "required": False, "captcha_id": "", "image": "", "expires_in": 0,
+            "email_verification_required": email_required,
+        }
+    return {
+        "required": True, **generate_captcha(),
+        "email_verification_required": email_required,
+    }
+
+
+@router.post("/email/code")
+def send_email_code(req: EmailCodeRequest, db: Session = Depends(get_db)):
+    """发送邮箱验证码(注册 / 找回密码共用同邮箱冷却与限流)"""
+    _assert_captcha(req.captcha_id, req.captcha_code)
+    email = normalize_email(req.email)
+    purpose = req.purpose
+
+    user = db.query(User).filter(User.email == email).first()
+    if purpose == PURPOSE_REGISTER:
+        _assert_register_domain(email)
+        # 已注册且已验证的邮箱不再发注册码;未验证账号仍可发码用于激活
+        if user is not None and user.email_verified_at is not None:
+            raise HTTPException(status_code=409, detail="该邮箱已注册")
+    elif user is None or getattr(user, "status", "active") == "disabled":
+        # 防账号枚举:不存在的邮箱一律返回成功,且不产生验证码记录
+        return {
+            "ok": True,
+            "expires_in": settings.EMAIL_CODE_TTL_SECONDS,
+            "resend_after": settings.EMAIL_CODE_RESEND_SECONDS,
+            "masked_email": mask_email(email),
+        }
+
+    assert_can_send(db, email, purpose, get_client_ip())
+    issued = issue_code(db, email, purpose, get_client_ip())
+    return {
+        "ok": True,
+        "expires_in": issued["expires_in"],
+        "resend_after": issued["resend_after"],
+        "masked_email": mask_email(email),
+    }
 
 
 @router.post("/register", response_model=TokenResponse)
@@ -220,12 +277,18 @@ def register(req: RegisterRequest, response: Response, db: Session = Depends(get
     if existing:
         raise HTTPException(status_code=400, detail="该邮箱已注册")
 
+    if email_verification_required():
+        if not (req.email_code or "").strip():
+            raise HTTPException(status_code=400, detail="请输入邮箱验证码")
+        consume_code(db, normalize_email(req.email), PURPOSE_REGISTER, req.email_code)
+
     user = User(
         role=req.role,
         name=req.name,
         email=req.email,
         password_hash=hash_password(req.password),
         status="active",
+        email_verified_at=datetime.utcnow(),
     )
     db.add(user)
     db.commit()
@@ -233,6 +296,54 @@ def register(req: RegisterRequest, response: Response, db: Session = Depends(get
 
     logger.info("新用户注册: %s (%s)", mask_email(user.email), user.role)
     return _issue_session(user, response)
+
+
+@router.post("/email/verify", response_model=TokenResponse)
+def verify_email(
+    req: EmailVerifyRequest, response: Response, db: Session = Depends(get_db),
+):
+    """未验证账号激活:凭邮箱验证码完成验证并直接签发会话"""
+    email = normalize_email(req.email)
+    user = db.query(User).filter(User.email == email).first()
+    if user is None:
+        raise HTTPException(status_code=400, detail="验证码错误或已过期")
+    if getattr(user, "status", "active") == "disabled":
+        raise HTTPException(status_code=403, detail="账号已被禁用")
+
+    consume_code(db, email, PURPOSE_REGISTER, req.code)
+    user.email_verified_at = datetime.utcnow()
+    db.commit()
+    db.refresh(user)
+
+    logger.info("邮箱验证通过: %s", mask_email(user.email))
+    return _issue_session(user, response)
+
+
+@router.post("/password/reset")
+def reset_password(req: PasswordResetRequest, db: Session = Depends(get_db)):
+    """邮箱验证码自助重置密码;成功后旧访问/刷新令牌立即失效"""
+    email = normalize_email(req.email)
+    user = db.query(User).filter(User.email == email).first()
+    if user is None:
+        raise HTTPException(status_code=400, detail="验证码错误或已过期")
+
+    consume_code(db, email, PURPOSE_RESET_PASSWORD, req.code)
+
+    user.password_hash = hash_password(req.new_password)
+    user.token_version = int(user.token_version or 0) + 1
+    db.add(OperationLog(
+        admin_id=user.id,
+        action="reset_password",
+        target_type="user",
+        target_id=user.id,
+        detail=json.dumps({"source": "self_service"}, ensure_ascii=False),
+        ip=get_client_ip() or None,
+    ))
+    db.commit()
+    _clear_login_failures(email)
+
+    logger.info("用户自助重置密码: %s", mask_email(user.email))
+    return {"ok": True}
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -250,6 +361,12 @@ def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)):
         )
     if getattr(user, "status", "active") == "disabled":
         raise HTTPException(status_code=403, detail="账号已被禁用")
+    if email_verification_required() and user.email_verified_at is None:
+        raise HTTPException(
+            status_code=403,
+            detail="邮箱尚未验证，请先完成邮箱验证",
+            headers={"X-Error-Code": "email_unverified"},
+        )
 
     _clear_login_failures(req.email)
     logger.info("用户登录: %s (%s)", mask_email(user.email), user.role)

@@ -97,6 +97,16 @@ def _migrate_sqlite_columns():
                 conn.execute(text(
                     "ALTER TABLE chat_messages ADD COLUMN request_id VARCHAR(64) NULL"
                 ))
+            rows = conn.execute(text("PRAGMA table_info(users)")).fetchall()
+            if rows and "email_verified_at" not in {row[1] for row in rows}:
+                conn.execute(text(
+                    "ALTER TABLE users ADD COLUMN email_verified_at DATETIME NULL"
+                ))
+                # 补列时一次性回填存量用户,避免老账号被验证开关锁死
+                conn.execute(text(
+                    "UPDATE users SET email_verified_at = COALESCE(created_at, CURRENT_TIMESTAMP)"
+                    " WHERE email_verified_at IS NULL"
+                ))
             _merge_duplicate_review_plans_sqlite(conn)
     except Exception:  # 迁移失败不阻断启动
         pass
@@ -249,6 +259,7 @@ def _migrate_exam_record_columns():
         "users": {
             "token_version": "INT NOT NULL DEFAULT 0 COMMENT '令牌版本号'",
             "avatar_url": "VARCHAR(255) NULL COMMENT '头像相对路径'",
+            "email_verified_at": "DATETIME NULL COMMENT '邮箱验证通过时间'",
         },
         "interaction_logs": {
             "security_level": "VARCHAR(20) NULL COMMENT '信息分级结果'",
@@ -301,6 +312,7 @@ def _migrate_exam_record_columns():
 
     try:
         with engine.begin() as conn:
+            added_email_verified_column = False
             for table, columns in table_columns.items():
                 existing = {
                     row[0] for row in conn.execute(text(f"SHOW COLUMNS FROM {table}"))
@@ -310,6 +322,14 @@ def _migrate_exam_record_columns():
                         conn.execute(text(
                             f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"
                         ))
+                        if table == "users" and name == "email_verified_at":
+                            added_email_verified_column = True
+            if added_email_verified_column:
+                # 只在首次补列时回填存量用户,之后新增账号按真实验证状态判断
+                conn.execute(text(
+                    "UPDATE users SET email_verified_at = COALESCE(created_at, NOW())"
+                    " WHERE email_verified_at IS NULL"
+                ))
             indexes = {
                 row[2] for row in conn.execute(text("SHOW INDEX FROM wrong_questions"))
             }

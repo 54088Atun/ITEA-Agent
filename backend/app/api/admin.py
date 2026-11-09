@@ -326,6 +326,8 @@ def create_user(
         role=req.role, name=req.name, email=req.email,
         admin_level=(req.admin_level or "normal") if req.role == "admin" else None,
         password_hash=hash_password(req.password), status="active",
+        # 管理员开通视为已核验邮箱,不受登录验证拦截
+        email_verified_at=datetime.utcnow(),
     )
     db.add(user)
     db.flush()

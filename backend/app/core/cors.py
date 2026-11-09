@@ -17,4 +17,6 @@ def configure_cors(app: FastAPI, config: Settings | None = None) -> None:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        # 前端需要读取该响应头区分「邮箱未验证」与普通 403
+        expose_headers=["X-Error-Code"],
     )

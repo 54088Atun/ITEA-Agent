@@ -1,4 +1,5 @@
 from app.models.user import User
+from app.models.email_verification import EmailVerificationCode
 from app.models.course import Course, CourseMaterial, KnowledgePoint, MaterialParseJob
 from app.models.profile import StudentProfile, MasteryRecord, WrongQuestion, ReviewPlan
 from app.models.practice import PracticeRecord
@@ -21,7 +22,8 @@ from app.models.privacy import PrivacySetting
 from app.models.agent_memory import AgentMemory, AgentFeedback
 
 __all__ = [
-    "User", "Course", "CourseMaterial", "KnowledgePoint", "MaterialParseJob",
+    "User", "EmailVerificationCode",
+    "Course", "CourseMaterial", "KnowledgePoint", "MaterialParseJob",
     "StudentProfile", "MasteryRecord", "WrongQuestion", "ReviewPlan",
     "PracticeRecord", "InterviewRecord",
     "Classroom", "ClassMember", "CourseEnrollment", "CourseCollaborator", "CourseShare",

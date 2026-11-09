@@ -7,6 +7,7 @@
 """
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -34,6 +35,7 @@ def main():
             user = User(
                 role="admin", name="系统管理员", email=email,
                 password_hash=hash_password(password), status="active",
+                email_verified_at=datetime.utcnow(),
             )
             db.add(user)
         db.commit()

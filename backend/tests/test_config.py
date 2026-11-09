@@ -17,6 +17,8 @@ def production_settings(**overrides):
         "ENVIRONMENT": "production",
         "SECRET_KEY": TEST_SECRET_KEY,
         "DATABASE_URL": TEST_DATABASE_URL,
+        # 邮件配置另有专项校验,这里只验证数据库/密钥等既有必填项
+        "REQUIRE_EMAIL_VERIFICATION": False,
     }
     values.update(overrides)
     return Settings(**values)
