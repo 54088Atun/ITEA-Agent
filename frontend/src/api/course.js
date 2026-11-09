@@ -13,6 +13,22 @@ export const courseApi = {
   detail(id) {
     return http.get(`/course/${id}`)
   },
+  /** 教师目录检索:按姓名/邮箱搜索有效教师,用于选择课程协作教师 */
+  searchTeachers({ keyword = '', courseId = null } = {}) {
+    return http.get('/course/teachers', {
+      params: { keyword, course_id: courseId || undefined },
+    })
+  },
+  /** 课程协作教师列表 */
+  collaborators(id) {
+    return http.get(`/course/${id}/collaborators`)
+  },
+  addCollaborator(id, teacherId) {
+    return http.post(`/course/${id}/collaborators`, { teacher_id: teacherId })
+  },
+  removeCollaborator(id, teacherId) {
+    return http.delete(`/course/${id}/collaborators/${teacherId}`)
+  },
   /** 知识点列表 → [{id, name, description, parent_id}] */
   knowledgePoints(id) {
     return http.get(`/course/${id}/knowledge-points`)

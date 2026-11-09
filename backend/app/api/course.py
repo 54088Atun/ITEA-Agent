@@ -100,6 +100,39 @@ def _collaborator_out(row: CourseCollaborator, teacher: User) -> dict:
     }
 
 
+@router.get("/teachers")
+def search_teachers(
+    keyword: str = Query("", max_length=50),
+    course_id: Optional[int] = Query(
+        None, description="传入课程时排除课程拥有者与已有协作者",
+    ),
+    teacher: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """教师目录检索:按姓名或邮箱搜索有效教师账号,用于选择课程协作教师"""
+    query = db.query(User).filter(User.role == "teacher", User.status == "active")
+    text = (keyword or "").strip()
+    if text:
+        like = f"%{text}%"
+        query = query.filter(or_(User.name.like(like), User.email.like(like)))
+    if course_id is not None:
+        course = _assert_course_owner(teacher, course_id, db)
+        collaborator_ids = [
+            row.teacher_id for row in
+            db.query(CourseCollaborator)
+            .filter(CourseCollaborator.course_id == course_id)
+            .all()
+        ]
+        query = query.filter(User.id != course.teacher_id)
+        if collaborator_ids:
+            query = query.filter(User.id.notin_(collaborator_ids))
+    rows = query.order_by(User.name.asc()).limit(20).all()
+    return [
+        {"id": row.id, "name": row.name, "email": row.email}
+        for row in rows
+    ]
+
+
 @router.get("/{course_id}/collaborators")
 def list_collaborators(
     course_id: int,

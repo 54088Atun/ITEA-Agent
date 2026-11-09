@@ -217,6 +217,38 @@
         </div>
       </el-tab-pane>
 
+      <!-- 协作教师 -->
+      <el-tab-pane v-if="canEditInfo" label="协作教师" name="collaborators">
+        <div class="tab-body">
+          <div class="filter-bar">
+            <el-button type="primary" @click="openAddCollaborator">
+              <el-icon><Plus /></el-icon> 添加协作教师
+            </el-button>
+            <span class="tip">协作者可维护本课程的知识点、资料与作业；学生数据仍归课程拥有者</span>
+            <div class="filter-bar__spacer"></div>
+            <span class="filter-bar__count">共 {{ collaborators.length }} 位</span>
+          </div>
+
+          <div class="panel">
+            <el-table :data="collaborators" v-loading="collabLoading">
+              <el-table-column prop="teacher_name" label="教师" width="160" />
+              <el-table-column prop="teacher_email" label="邮箱" min-width="200" />
+              <el-table-column label="添加时间" width="180">
+                <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+              </el-table-column>
+              <el-table-column label="操作" width="100">
+                <template #default="{ row }">
+                  <el-button link type="danger" @click="removeCollaborator(row)">移除</el-button>
+                </template>
+              </el-table-column>
+              <template #empty>
+                <StateBlock state="empty" title="暂无协作教师" hint="点击上方按钮搜索教师账号后添加" />
+              </template>
+            </el-table>
+          </div>
+        </div>
+      </el-tab-pane>
+
       <!-- 课程对应的作业与考试 -->
       <el-tab-pane label="作业与考试" name="tasks">
         <div class="tab-body">
@@ -364,6 +396,40 @@
       <template #footer>
         <el-button @click="announceVisible = false">取消</el-button>
         <el-button type="primary" :loading="announcing" @click="submitAnnouncement">发布</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 添加协作教师 -->
+    <el-dialog v-model="collabDialog" title="添加协作教师" width="480px">
+      <el-form label-position="top">
+        <el-form-item label="选择教师" required>
+          <el-select
+            v-model="collabTeacherId"
+            filterable
+            remote
+            clearable
+            :remote-method="searchTeacherOptions"
+            :loading="collabSearching"
+            placeholder="输入姓名或邮箱搜索"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="t in teacherOptions"
+              :key="t.id"
+              :label="`${t.name}（${t.email}）`"
+              :value="t.id"
+            />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="collabDialog = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="collabSaving"
+          :disabled="!collabTeacherId"
+          @click="addCollaborator"
+        >添加</el-button>
       </template>
     </el-dialog>
 
@@ -579,6 +645,15 @@ const announcing = ref(false)
 const announceForm = reactive({ classId: null, content: '' })
 const courseClasses = ref([])
 
+// ---------- 协作教师 ----------
+const collaborators = ref([])
+const collabLoading = ref(false)
+const collabDialog = ref(false)
+const collabSearching = ref(false)
+const collabSaving = ref(false)
+const collabTeacherId = ref(null)
+const teacherOptions = ref([])
+
 // ---------- 资料预览 ----------
 const previewVisible = ref(false)
 const previewMaterial = ref(null)
@@ -651,6 +726,7 @@ async function load() {
     loadTasks()
     loadOverview()
     loadGradingQueue()
+    loadCollaborators()
   } catch { /* 拦截器已提示 */ } finally {
     loading.value = false
   }
@@ -685,6 +761,68 @@ async function loadGradingQueue() {
 
 function openQueueAssignment(row) {
   router.push(`/teacher/assignments/${row.assignment_id}`)
+}
+
+/** 协作教师列表:仅课程拥有者或管理员可读 */
+async function loadCollaborators() {
+  if (!canEditInfo.value) return
+  collabLoading.value = true
+  try {
+    const rows = await courseApi.collaborators(courseId)
+    collaborators.value = Array.isArray(rows) ? rows : []
+  } catch {
+    collaborators.value = []
+  } finally {
+    collabLoading.value = false
+  }
+}
+
+function openAddCollaborator() {
+  collabTeacherId.value = null
+  teacherOptions.value = []
+  collabDialog.value = true
+  searchTeacherOptions('')
+}
+
+/** 远程搜索教师,排除课程拥有者与已有协作者 */
+async function searchTeacherOptions(keyword) {
+  collabSearching.value = true
+  try {
+    const rows = await courseApi.searchTeachers({ keyword: keyword || '', courseId })
+    teacherOptions.value = Array.isArray(rows) ? rows : []
+  } catch {
+    teacherOptions.value = []
+  } finally {
+    collabSearching.value = false
+  }
+}
+
+async function addCollaborator() {
+  if (!collabTeacherId.value) return
+  collabSaving.value = true
+  try {
+    await courseApi.addCollaborator(courseId, collabTeacherId.value)
+    ElMessage.success('已添加协作教师')
+    collabDialog.value = false
+    loadCollaborators()
+  } catch { /* 拦截器已提示 */ } finally {
+    collabSaving.value = false
+  }
+}
+
+async function removeCollaborator(row) {
+  try {
+    await ElMessageBox.confirm(
+      `确认移除协作教师「${row.teacher_name}」？移除后其将失去本课程的维护权限。`,
+      '移除协作教师',
+      { type: 'warning' },
+    )
+  } catch { return }
+  try {
+    await courseApi.removeCollaborator(courseId, row.teacher_id)
+    ElMessage.success('已移除')
+    loadCollaborators()
+  } catch { /* 拦截器已提示 */ }
 }
 
 async function openAnnouncement() {
