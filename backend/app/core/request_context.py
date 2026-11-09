@@ -11,10 +11,26 @@ import uuid
 _request_id: contextvars.ContextVar[str] = contextvars.ContextVar(
     "request_id", default="-",
 )
+_client_ip: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "client_ip", default="",
+)
 
 
 def get_request_id() -> str:
     return _request_id.get()
+
+
+def get_client_ip() -> str:
+    return _client_ip.get()
+
+
+def _extract_client_ip(scope) -> str:
+    headers = dict(scope.get("headers") or [])
+    forwarded = (headers.get(b"x-forwarded-for") or b"").decode("latin-1")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    client = scope.get("client") or ()
+    return client[0] if client else ""
 
 
 class RequestContextMiddleware:
@@ -33,6 +49,7 @@ class RequestContextMiddleware:
         request_id = incoming[:64] or uuid.uuid4().hex[:16]
         scope.setdefault("state", {})["request_id"] = request_id
         token = _request_id.set(request_id)
+        ip_token = _client_ip.set(_extract_client_ip(scope))
 
         async def send_with_header(message):
             if message["type"] == "http.response.start":
@@ -44,6 +61,7 @@ class RequestContextMiddleware:
         try:
             await self.app(scope, receive, send_with_header)
         finally:
+            _client_ip.reset(ip_token)
             _request_id.reset(token)
 
 

@@ -16,6 +16,7 @@ from app.core.security import (
 )
 from app.core.deps import get_current_user, user_from_token
 from app.core.log_sanitizer import mask_email
+from app.core.request_context import get_client_ip
 from app.models.user import User
 from app.schemas.auth import RegisterRequest, LoginRequest, TokenResponse, UserOut
 from app.services.captcha import (
@@ -41,44 +42,65 @@ def _login_key(email: str) -> str:
     return (email or "").strip().lower()
 
 
-def _prune_login_failures(key: str, now: float) -> deque:
+def _prune_login_failures(key: str, now: float, window: int) -> deque:
     bucket = _login_failures.setdefault(key, deque())
-    while bucket and now - bucket[0] > LOGIN_FAILURE_WINDOW:
+    while bucket and now - bucket[0] > window:
         bucket.popleft()
     return bucket
 
 
-def _assert_login_allowed(email: str) -> None:
-    key = _login_key(email)
-    if not key:
+def _check_limit(key: str, limit: int, window: int) -> None:
+    if not key or limit <= 0:
         return
     with _login_failures_lock:
-        bucket = _prune_login_failures(key, time.monotonic())
+        bucket = _prune_login_failures(key, time.monotonic(), window)
         if not bucket:
             _login_failures.pop(key, None)
             return
-        if len(bucket) >= LOGIN_MAX_FAILURES:
+        if len(bucket) >= limit:
             raise HTTPException(
                 status_code=429,
-                detail="登录失败次数过多，请 5 分钟后再试",
-                headers={"Retry-After": str(LOGIN_FAILURE_WINDOW)},
+                detail="登录失败次数过多，请稍后再试",
+                headers={"Retry-After": str(window)},
             )
 
 
-def _record_login_failure(email: str) -> None:
-    key = _login_key(email)
+def _hit_limit(key: str, window: int) -> None:
     if not key:
         return
     with _login_failures_lock:
-        if len(_login_failures) > 5000:
+        if len(_login_failures) > 10000:
             _login_failures.clear()
         now = time.monotonic()
-        _prune_login_failures(key, now).append(now)
+        _prune_login_failures(key, now, window).append(now)
+
+
+def _assert_login_allowed(email: str) -> None:
+    _check_limit(f"email:{_login_key(email)}", LOGIN_MAX_FAILURES, LOGIN_FAILURE_WINDOW)
+
+
+def _assert_ip_allowed() -> None:
+    ip = get_client_ip()
+    _check_limit(
+        f"ip:{ip}" if ip else "",
+        settings.LOGIN_IP_MAX_FAILURES,
+        settings.LOGIN_IP_WINDOW_SECONDS,
+    )
+
+
+def _record_login_failure(email: str) -> None:
+    _hit_limit(f"email:{_login_key(email)}", LOGIN_FAILURE_WINDOW)
+    ip = get_client_ip()
+    if ip:
+        _hit_limit(f"ip:{ip}", settings.LOGIN_IP_WINDOW_SECONDS)
 
 
 def _clear_login_failures(email: str) -> None:
     with _login_failures_lock:
-        _login_failures.pop(_login_key(email), None)
+        _login_failures.pop(f"email:{_login_key(email)}", None)
+        ip = get_client_ip()
+        if ip:
+            _login_failures.pop(f"ip:{ip}", None)
 
 
 def _register_domains() -> list[str]:
@@ -217,6 +239,7 @@ def register(req: RegisterRequest, response: Response, db: Session = Depends(get
 def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)):
     """邮箱密码登录"""
     _assert_captcha(req.captcha_id, req.captcha_code)
+    _assert_ip_allowed()
     _assert_login_allowed(req.email)
     user = db.query(User).filter(User.email == req.email).first()
     if not user or not verify_password(req.password, user.password_hash):

@@ -538,7 +538,7 @@ def test_login_success_resets_failure_counter(db):
             with pytest.raises(HTTPException):
                 auth_login(LoginRequest(email=user.email, password="wrong-pass1"), Response(), db)
         auth_login(LoginRequest(email=user.email, password="correct-pass1"), Response(), db)
-        assert user.email.lower() not in auth_api._login_failures
+        assert f"email:{user.email.lower()}" not in auth_api._login_failures
     finally:
         auth_api._login_failures.clear()
 
@@ -589,3 +589,38 @@ def test_register_email_domain_whitelist(monkeypatch, db):
     ), Response(), db)
     assert payload.role == "student"
     assert payload.user.email == "student@cs.edu.cn"
+
+
+def test_login_ip_rate_limit(monkeypatch, db):
+    """同一 IP 下多账号连续失败达到上限后统一返回 429,换 IP 不受影响"""
+    from app.api import auth as auth_api
+
+    auth_api._login_failures.clear()
+    monkeypatch.setattr(auth_api, "get_client_ip", lambda: "10.1.2.3")
+    monkeypatch.setattr(auth_api.settings, "LOGIN_IP_MAX_FAILURES", 3)
+    try:
+        for i in range(3):
+            with pytest.raises(HTTPException) as exc:
+                auth_login(
+                    LoginRequest(email=f"ip-user-{i}@example.com", password="wrong-pass1"),
+                    Response(), db,
+                )
+            assert exc.value.status_code == 401
+
+        with pytest.raises(HTTPException) as exc:
+            auth_login(
+                LoginRequest(email="another@example.com", password="wrong-pass1"),
+                Response(), db,
+            )
+        assert exc.value.status_code == 429
+
+        # 换 IP 后账号维度尚未触发,仍返回 401
+        monkeypatch.setattr(auth_api, "get_client_ip", lambda: "10.9.9.9")
+        with pytest.raises(HTTPException) as exc:
+            auth_login(
+                LoginRequest(email="another2@example.com", password="wrong-pass1"),
+                Response(), db,
+            )
+        assert exc.value.status_code == 401
+    finally:
+        auth_api._login_failures.clear()
