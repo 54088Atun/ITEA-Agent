@@ -9,6 +9,9 @@
         <el-select v-model="courseId" placeholder="选择课程" filterable style="width: 200px" @change="load">
           <el-option v-for="c in courses" :key="c.id" :label="c.name" :value="c.id" />
         </el-select>
+        <el-button :disabled="!courseId" @click="openLesson">
+          <el-icon><MagicStick /></el-icon> AI 教案
+        </el-button>
         <el-dropdown @command="doExport">
           <el-button type="primary" :loading="exporting">
             <el-icon><Download /></el-icon> 导出文档
@@ -107,13 +110,39 @@
     </template>
 
     <div v-else-if="!loading && !error" class="empty-state">选择课程后查看班级看板</div>
+
+    <!-- AI 教案生成 -->
+    <el-dialog v-model="lessonVisible" title="AI 教案生成" width="720px">
+      <el-form inline class="lesson-form">
+        <el-form-item label="章节">
+          <el-input
+            v-model="lessonForm.chapter"
+            placeholder="选填，如：第三章 等价类划分"
+            style="width: 260px"
+          />
+        </el-form-item>
+        <el-form-item label="课时">
+          <el-input-number v-model="lessonForm.hours" :min="1" :max="12" />
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" :loading="lessonLoading" @click="generateLesson">生成</el-button>
+        </el-form-item>
+      </el-form>
+      <div class="lesson-out" v-loading="lessonLoading">
+        {{ lessonText || '填写章节后点击生成，教案会在这里流式输出。' }}
+      </div>
+      <template #footer>
+        <el-button @click="lessonVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
-import { teacherApi } from '../../api/teacher'
+import { teacherApi, LESSON_PLAN_URL } from '../../api/teacher'
+import { ssePost } from '../../utils/sse.js'
 import SkeletonTable from '../../components/SkeletonTable.vue'
 import StateBlock from '../../components/StateBlock.vue'
 import CountUp from '../../components/CountUp.vue'
@@ -124,6 +153,13 @@ const courses = ref([])
 const courseId = ref(null)
 const report = ref(null)
 const exporting = ref(false)
+
+// AI 教案:经 SSE 流式返回,渲染为纯文本保留排版
+const lessonVisible = ref(false)
+const lessonLoading = ref(false)
+const lessonText = ref('')
+const lessonForm = reactive({ chapter: '', hours: 2 })
+let lessonController = null
 
 onMounted(async () => {
   try {
@@ -180,6 +216,46 @@ async function doExport(type) {
     exporting.value = false
   }
 }
+
+function openLesson() {
+  lessonText.value = ''
+  lessonVisible.value = true
+}
+
+function generateLesson() {
+  if (!courseId.value) return ElMessage.warning('请先选择课程')
+  lessonController?.abort()
+  lessonText.value = ''
+  lessonLoading.value = true
+  lessonController = ssePost(
+    LESSON_PLAN_URL,
+    {
+      course_id: courseId.value,
+      chapter: lessonForm.chapter.trim() || null,
+      hours: lessonForm.hours || null,
+    },
+    {
+      onEvent(evt) {
+        if (evt.type === 'token') {
+          lessonText.value += evt.data?.content || ''
+        } else if (evt.type === 'reset') {
+          lessonText.value = ''
+        } else if (evt.type === 'error') {
+          lessonText.value += `\n[生成失败] ${evt.data?.message || '请稍后重试'}`
+        }
+      },
+      onDone() { lessonLoading.value = false },
+      onError(err) {
+        lessonLoading.value = false
+        ElMessage.error(err?.message || '教案生成失败')
+      },
+    },
+  )
+}
+
+onBeforeUnmount(() => {
+  lessonController?.abort()
+})
 </script>
 
 <style scoped>
@@ -189,4 +265,19 @@ async function doExport(type) {
 .row-bar--good :deep(.el-progress-bar__inner) { background: var(--chart-good); }
 .row-bar--mid :deep(.el-progress-bar__inner) { background: var(--chart-mid); }
 .row-bar--weak :deep(.el-progress-bar__inner) { background: var(--chart-weak); }
+
+.lesson-form { margin-bottom: var(--sp-2); }
+.lesson-out {
+  min-height: 240px;
+  max-height: 52vh;
+  overflow: auto;
+  padding: var(--sp-4);
+  background: var(--bg-subtle);
+  border-radius: var(--r-md);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-base);
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 </style>

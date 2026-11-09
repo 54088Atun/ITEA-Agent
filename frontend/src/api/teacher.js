@@ -162,6 +162,14 @@ export const teacherApi = {
   confirmSubmission(submissionId, data) {
     return http.post(`/teacher/submissions/${submissionId}/confirm`, data)
   },
+  /** 对指定学生的作业给出成绩与反馈(等价于确认该次提交) */
+  feedbackStudent(studentId, { assignmentId, score, feedback = null }) {
+    return http.post(
+      `/teacher/students/${studentId}/feedback`,
+      { assignment_id: assignmentId, score, feedback },
+      { params: { confirm: true } },
+    )
+  },
   // ---------- 课程分享码 ----------
   createShare(courseId, data = {}, confirm = false) {
     // {expires_days?, max_uses?}

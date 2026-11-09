@@ -51,6 +51,43 @@
         />
       </div>
       <template v-else>
+        <div class="panel">
+          <div class="panel__head">
+            <span class="panel__title">作业评分反馈</span>
+          </div>
+          <el-form label-position="top" class="fb-form">
+            <div class="fb-grid">
+              <el-form-item label="作业">
+                <el-select
+                  v-model="feedbackForm.assignmentId"
+                  filterable
+                  placeholder="选择该课程的作业"
+                  style="width: 100%"
+                >
+                  <el-option v-for="a in courseAssignments" :key="a.id" :label="a.title" :value="a.id" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="分数">
+                <el-input-number v-model="feedbackForm.score" :min="0" :max="100" />
+              </el-form-item>
+            </div>
+            <el-form-item label="评语">
+              <el-input
+                v-model="feedbackForm.feedback"
+                type="textarea"
+                :rows="2"
+                placeholder="选填，确认后学生端可见"
+              />
+            </el-form-item>
+            <el-button
+              type="primary"
+              :loading="feedbackSaving"
+              :disabled="!feedbackForm.assignmentId"
+              @click="submitFeedback"
+            >提交成绩反馈</el-button>
+          </el-form>
+        </div>
+
         <div class="kpi-grid">
           <div class="kpi-card">
             <span>学习进度</span>
@@ -152,8 +189,9 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, reactive, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { classroomApi } from '../../api/classroom'
 import { teacherApi } from '../../api/teacher'
 import SkeletonTable from '../../components/SkeletonTable.vue'
@@ -180,6 +218,11 @@ const classroom = ref(null)
 const member = ref(null)
 const report = ref(null)
 const overview = ref(null)
+
+// 作业评分反馈
+const courseAssignments = ref([])
+const feedbackForm = reactive({ assignmentId: null, score: 80, feedback: '' })
+const feedbackSaving = ref(false)
 
 const visibleInReport = computed(() => {
   if (!report.value) return true
@@ -221,6 +264,7 @@ async function load() {
   }
   loading.value = false
   await loadOverview()
+  await loadAssignments()
 }
 
 async function loadOverview() {
@@ -239,6 +283,34 @@ async function loadOverview() {
 
 function roleLabel(role) {
   return ROLE_LABELS[role] || role || '—'
+}
+
+/** 该学生所在课程的作业列表,用于选择要反馈的作业 */
+async function loadAssignments() {
+  const cid = classroom.value?.course_id
+  if (!cid || member.value?.member_type === 'teacher') return
+  try {
+    const rows = await teacherApi.assignments()
+    courseAssignments.value = (Array.isArray(rows) ? rows : [])
+      .filter((row) => row.course_id === cid)
+  } catch {
+    courseAssignments.value = []
+  }
+}
+
+async function submitFeedback() {
+  if (!feedbackForm.assignmentId) return ElMessage.warning('请选择作业')
+  feedbackSaving.value = true
+  try {
+    await teacherApi.feedbackStudent(memberId, {
+      assignmentId: feedbackForm.assignmentId,
+      score: feedbackForm.score,
+      feedback: feedbackForm.feedback.trim() || null,
+    })
+    ElMessage.success('成绩已反馈，学生端可见')
+  } catch { /* 拦截器已提示 */ } finally {
+    feedbackSaving.value = false
+  }
 }
 
 function formatTime(value) {
@@ -273,4 +345,13 @@ function formatTime(value) {
   gap: var(--sp-4);
 }
 .panel { margin-bottom: var(--sp-4); }
+
+/* 作业评分反馈 */
+.fb-form { display: flex; flex-direction: column; gap: var(--sp-1); }
+.fb-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  gap: var(--sp-3);
+  align-items: start;
+}
 </style>
