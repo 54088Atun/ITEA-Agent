@@ -15,6 +15,7 @@ from app.agent.context import build_history, build_rag_context, render_plan
 from app.agent.data_api import fetch_memories
 from app.agent.sources import build_sources
 from app.agent.tool_loop import run_tool_loop
+from app.agent.time_context import time_prompt
 from app.agent.nodes.tool_executor import tool_schemas_for_role
 
 logger = logging.getLogger(__name__)
@@ -125,6 +126,8 @@ async def tutor_node(state: AgentState) -> dict:
         rag_context="(尚未检索:涉及课程内容时先调用 course_evidence 工具)",
         profile_snapshot="(尚未读取:需要个性化参考时先调用 profile_query 工具)",
     )
+    # 注入服务端当前时间,支持"明天/本周"类提醒与复习排程
+    system_prompt += time_prompt()
 
     # 反思重写:注入上一轮反思意见
     reflection_notes = state.get("reflection_notes", "")

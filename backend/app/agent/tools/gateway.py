@@ -112,7 +112,13 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
                     "enum": ["review", "interview"],
                     "description": "任务类型",
                 },
-                "trigger_at": {"type": "string", "description": "触发时间(ISO 格式)"},
+                "trigger_at": {
+                    "type": "string",
+                    "description": (
+                        "触发时间，带时区的 ISO 8601，"
+                        "如 2026-11-10T20:00:00+08:00；相对日期按当前时间换算"
+                    ),
+                },
             },
             "required": ["user_id", "task_type"],
         },

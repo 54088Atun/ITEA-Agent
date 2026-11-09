@@ -425,6 +425,26 @@ def test_tutor_skips_retrieval_for_small_talk(monkeypatch):
     assert calls == [], "寒暄不应触发课程检索"
 
 
+def test_tutor_prompt_injects_current_time(monkeypatch):
+    """P1-4:相对日期提醒需要服务端当前时间,不能让用户自行换算"""
+    captured = {}
+    monkeypatch.setitem(
+        TOOL_REGISTRY, "course_evidence",
+        lambda **kw: {"context": "", "fragments": []},
+    )
+
+    async def fake_llm(messages, sink=None, tools=None):
+        captured["system"] = messages[0]["content"]
+        return "回答"
+
+    monkeypatch.setattr(tutor_module, "llm_invoke", fake_llm)
+    asyncio.run(tutor_module.tutor_node(_state()))
+
+    assert "【当前时间】" in captured["system"]
+    assert "Asia/Shanghai" in captured["system"]
+    assert "ISO 8601" in captured["system"]
+
+
 def test_tutor_forces_retrieval_for_course_question(monkeypatch):
     calls = []
     monkeypatch.setitem(
