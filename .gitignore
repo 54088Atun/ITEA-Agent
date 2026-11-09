@@ -27,6 +27,16 @@ backend/uploads/
 backend/knowledge_base/index/
 *.log
 
+# ===== 数据库数据(仅表结构入库;业务数据/导出/备份/课件一律不入库)=====
+*.sql.gz
+*.dump
+*.db
+*.sqlite
+*.sqlite3
+*_data.sql
+*seed_data*.sql
+*backup*.sql
+
 # ===== IDE 与本地 Agent 工作区 =====
 .idea/
 .vscode/
