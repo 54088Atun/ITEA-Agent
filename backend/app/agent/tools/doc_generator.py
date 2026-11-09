@@ -17,7 +17,14 @@ OUTPUT_DIR = os.path.join("static", "generated")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
-def _generate_lesson_plan(data: dict) -> str:
+def _target_dir(subdir: str) -> str:
+    """按用户分子目录存放,便于静态文件入口做逐文件归属校验"""
+    directory = os.path.join(OUTPUT_DIR, subdir) if subdir else OUTPUT_DIR
+    os.makedirs(directory, exist_ok=True)
+    return directory
+
+
+def _generate_lesson_plan(data: dict, subdir: str = "") -> str:
     """生成教案 docx"""
     from docx import Document
 
@@ -36,12 +43,12 @@ def _generate_lesson_plan(data: dict) -> str:
             doc.add_paragraph(str(content))
 
     filename = f"lesson_plan_{uuid.uuid4().hex}.docx"
-    filepath = os.path.join(OUTPUT_DIR, filename)
+    filepath = os.path.join(_target_dir(subdir), filename)
     doc.save(filepath)
     return filename
 
 
-def _generate_preview_sheet(data: dict) -> str:
+def _generate_preview_sheet(data: dict, subdir: str = "") -> str:
     """生成预习单 docx"""
     from docx import Document
 
@@ -62,12 +69,12 @@ def _generate_preview_sheet(data: dict) -> str:
         doc.add_paragraph(ref, style="List Bullet")
 
     filename = f"preview_sheet_{uuid.uuid4().hex}.docx"
-    filepath = os.path.join(OUTPUT_DIR, filename)
+    filepath = os.path.join(_target_dir(subdir), filename)
     doc.save(filepath)
     return filename
 
 
-def _generate_report(data: dict) -> str:
+def _generate_report(data: dict, subdir: str = "") -> str:
     """生成学情报表 xlsx"""
     from openpyxl import Workbook
 
@@ -113,7 +120,7 @@ def _generate_report(data: dict) -> str:
         ws2.append([i, wp.get("point", ""), wp.get("avg_mastery", 0), wp.get("wrong_count", 0)])
 
     filename = f"class_report_{uuid.uuid4().hex}.xlsx"
-    filepath = os.path.join(OUTPUT_DIR, filename)
+    filepath = os.path.join(_target_dir(subdir), filename)
     wb.save(filepath)
     return filename
 
@@ -121,15 +128,17 @@ def _generate_report(data: dict) -> str:
 def doc_generator(
     doc_type: str,
     data: dict,
+    user_id: int | None = None,
 ) -> dict:
     """文档生成工具
 
     Args:
         doc_type: 文档类型(lesson_plan/preview_sheet/report)
         data: 文档内容数据
+        user_id: 由服务端会话注入,用于按用户隔离生成文件(模型不可指定)
 
     Returns:
-        {"file_url": "/static/generated/xxx.docx", "file_name": "xxx.docx"}
+        {"file_url": "/static/generated/{user_id}/xxx.docx", "file_name": "xxx.docx"}
     """
     generators = {
         "lesson_plan": _generate_lesson_plan,
@@ -140,11 +149,13 @@ def doc_generator(
     if not gen:
         return {"file_url": "", "file_name": "", "error": f"不支持的文档类型: {doc_type}"}
 
+    subdir = str(int(user_id)) if user_id else ""
     try:
-        filename = gen(data)
+        filename = gen(data, subdir=subdir)
         logger.info("文档生成成功: %s (%s)", filename, doc_type)
+        prefix = f"/static/generated/{subdir}" if subdir else "/static/generated"
         return {
-            "file_url": f"/static/generated/{filename}",
+            "file_url": f"{prefix}/{filename}",
             "file_name": filename,
         }
     except Exception as e:

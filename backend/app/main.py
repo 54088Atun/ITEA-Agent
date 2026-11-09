@@ -78,6 +78,7 @@ async def protect_static_files(request, call_next):
     from app.api.auth import AUTH_COOKIE
     from app.core.deps import user_from_token
     from app.db.session import SessionLocal
+    from app.services.static_acl import is_static_allowed
 
     token = request.cookies.get(AUTH_COOKIE) or ""
     if not token:
@@ -89,7 +90,14 @@ async def protect_static_files(request, call_next):
 
     db = SessionLocal()
     try:
-        user_from_token(token, db)
+        user = user_from_token(token, db)
+        # 逐文件归属:学生图片/录音仅本人,课程素材按课程可见性,生成文档仅生成者
+        if not is_static_allowed(request.url.path, user, db):
+            logger.warning(
+                "静态文件越权访问已拒绝: user=%s role=%s path=%s",
+                user.id, user.role, request.url.path,
+            )
+            return JSONResponse({"detail": "无权访问该文件"}, status_code=403)
     except HTTPException as exc:
         return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
     finally:
