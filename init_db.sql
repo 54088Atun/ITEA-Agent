@@ -201,12 +201,7 @@ CREATE TABLE IF NOT EXISTS system_config (
     FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- 初始系统配置项
-INSERT IGNORE INTO system_config (config_key, config_value, description) VALUES
-('risk_guard_enabled', 'true', '前置语义风控总开关'),
-('reflect_max_loops', '2', '反思校验最大循环次数'),
-('rag_top_k', '5', '知识库检索返回片段数'),
-('llm_model', '"deepseek-flash"', '当前使用的 LLM 模型');
+-- 初始系统配置由应用启动时的 seed_defaults() 幂等写入,此处不再内置数据
 
 -- 15. assignments 作业表
 CREATE TABLE IF NOT EXISTS assignments (

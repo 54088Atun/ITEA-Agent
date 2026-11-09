@@ -95,7 +95,7 @@ cd ITEA-Agent
 mysql -u root -p -e "source init_db.sql"
 ```
 
-脚本会创建 `itea_agent` 数据库及项目所需数据表。
+脚本会创建 `itea_agent` 数据库及项目所需数据表（仅表结构，不含业务数据；默认系统配置由后端启动时幂等写入）。
 
 ### 3. 配置并启动后端
 
@@ -120,6 +120,8 @@ LLM_MODEL=deepseek-flash
 初始化本地管理员并启动服务：
 
 ```powershell
+$env:ADMIN_EMAIL="admin@example.com"
+$env:ADMIN_PASSWORD="请设置强密码"
 python scripts/seed_admin.py
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
@@ -129,7 +131,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 - 健康检查：`http://127.0.0.1:8000/health`
 - OpenAPI 文档：`http://127.0.0.1:8000/docs`
 
-> `seed_admin.py` 会创建或重置 `admin@itea.com`，初始密码为 `Admin@123456`。该账号仅用于本地初始化，登录后应立即修改密码，生产环境不得沿用默认凭据。重复执行脚本会重置此管理员密码。
+> `seed_admin.py` 只从 `ADMIN_EMAIL` / `ADMIN_PASSWORD` 环境变量读取账号信息，仓库内不内置任何默认账号或密码。重复执行脚本会重置该管理员密码。
 
 ### 4. 启动前端
 
@@ -184,8 +186,8 @@ npm run build
 
 ## 安全说明
 
-- 不要提交真实 `.env`、数据库密码、API 密钥或用户数据。
-- 生产环境必须替换示例数据库密码与 JWT `SECRET_KEY`，并立即修改默认管理员密码。
+- 不要提交真实 `.env`、数据库密码、API 密钥、业务数据或课件；数据库仅表结构（`init_db.sql`）入库。
+- 生产环境必须替换示例数据库密码与 JWT `SECRET_KEY`；管理员密码只通过环境变量注入，不要写入仓库或文档。
 - 管理写操作必须先预览再由有权限的用户确认；请妥善保护管理员账号。
 - 项目自检与联网访问应限制在可信目录和域名范围内。
 - 本项目提供的安全边界不能替代生产环境的鉴权、备份、审计、限流和密钥管理措施。
