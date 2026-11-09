@@ -16,6 +16,15 @@ COLLAB_HINTS = ("多agent协作", "多 agent 协作", "多智能体协作", "协
 # 不参与协作的入口:面试有计时/评分状态机,管理端有写操作确认流程
 COLLAB_EXCLUDED_BRANCHES = ("interview", "admin")
 
+# 提醒类请求统一交给 tutor(该分支暴露 reminder_scheduler),避免被"复习"关键词带到 review
+REMINDER_HINTS = ("提醒", "闹钟", "定时", "日程", "remind", "schedule")
+
+
+def _is_reminder_request(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(hint in lowered for hint in REMINDER_HINTS)
+
+
 
 def _parse_json(text: str) -> dict:
     """健壮解析 LLM 输出的 JSON(兼容 markdown 代码块包裹、前后多余文本)"""
@@ -146,6 +155,15 @@ async def router_node(state: AgentState) -> dict:
             "risk_type": "",
             "intent": state.get("intent") or "chat",
             "branch": forced_branch,
+        }
+
+    # ---- 提醒类请求:交给 tutor,保证 reminder_scheduler 可用 ----
+    if _is_reminder_request(latest_msg):
+        return {
+            "risk_flag": False,
+            "risk_type": "",
+            "intent": "chat",
+            "branch": "tutor",
         }
 
     # ---- 第二道:意图识别与分支路由 ----

@@ -445,6 +445,26 @@ def test_tutor_prompt_injects_current_time(monkeypatch):
     assert "ISO 8601" in captured["system"]
 
 
+def test_reminder_request_routes_to_tutor(monkeypatch):
+    """P1-4:提醒请求不能被'复习'关键词带到 review 分支"""
+    from app.agent.nodes import router
+
+    monkeypatch.setattr(router, "_risk_gate", AsyncMock(return_value=None))
+    monkeypatch.setattr(router, "check_answer_request", lambda *a, **k: None)
+    monkeypatch.setattr(
+        router, "llm_invoke",
+        AsyncMock(side_effect=AssertionError("提醒请求不应调用意图模型")),
+    )
+    state = {
+        "messages": [{"role": "user", "content": "明天晚上8点提醒我复习数据结构最短路径"}],
+        "user_id": 1,
+        "user_role": "student",
+        "course_id": 210001,
+    }
+    result = asyncio.run(router.router_node(state))
+    assert result["branch"] == "tutor"
+
+
 def test_tutor_forces_retrieval_for_course_question(monkeypatch):
     calls = []
     monkeypatch.setitem(
