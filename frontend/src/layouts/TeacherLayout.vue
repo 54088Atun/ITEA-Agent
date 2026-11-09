@@ -63,8 +63,15 @@ const userStore = useUserStore()
 onMounted(loadFeatures)
 
 const activeMenu = computed(() => {
-  // 课程详情页高亮"课程管理"
+  // 详情页统一高亮所属列表菜单
   if (route.path.startsWith('/teacher/course/')) return '/teacher/courses'
+  if (route.path.startsWith('/teacher/classes')) return '/teacher/classes'
+  if (route.path.startsWith('/teacher/assignments')) return '/teacher/assignments'
+  if (
+    route.path.startsWith('/teacher/questions')
+    || route.path.startsWith('/teacher/exams')
+    || route.path.startsWith('/teacher/exam-records')
+  ) return '/teacher/questions'
   return route.path
 })
 </script>

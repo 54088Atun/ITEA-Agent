@@ -46,6 +46,10 @@ export const teacherApi = {
       timeout: 120000,
     })
   },
+  /** 单个学生的课程学情:进度/掌握度/薄弱点/错题/复习/面试 */
+  studentCourseOverview(courseId, studentId) {
+    return http.get(`/teacher/courses/${courseId}/students/${studentId}/overview`)
+  },
   /** 班级学情 → {course_id, course_name, student_count, avg_progress(0-100), weak_points, students} */
   classReport(courseId) {
     return http.get(`/teacher/class-report/${courseId}`)

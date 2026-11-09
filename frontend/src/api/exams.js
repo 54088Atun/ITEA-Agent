@@ -10,6 +10,10 @@ export const examApi = {
     // {course_id, kp_id?, type, stem, options:[{key,text}], answer, analysis?, difficulty}
     return http.post('/teacher/questions', data)
   },
+  /** 单题详情(含答案与解析) */
+  question(id) {
+    return http.get(`/teacher/questions/${id}`)
+  },
   updateQuestion(id, data) {
     return http.put(`/teacher/questions/${id}`, data)
   },

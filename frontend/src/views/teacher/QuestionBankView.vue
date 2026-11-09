@@ -45,7 +45,13 @@
                 <el-tag :type="typeTag(row.type)" size="small" effect="light">{{ typeLabel(row.type) }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="stem" label="题干" min-width="260" show-overflow-tooltip />
+            <el-table-column label="题干" min-width="260">
+              <template #default="{ row }">
+                <el-button link type="primary" class="stem-link" @click="openQuestionDetail(row)">
+                  {{ row.stem }}
+                </el-button>
+              </template>
+            </el-table-column>
             <el-table-column label="难度" width="110">
               <template #default="{ row }">
                 <el-rate :model-value="row.difficulty" disabled :max="5" size="small" />
@@ -58,8 +64,9 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="90" fixed="right">
+            <el-table-column label="操作" width="150" fixed="right">
               <template #default="{ row }">
+                <el-button link type="primary" @click="openQuestionDetail(row)">查看</el-button>
                 <el-button link type="danger" @click="archiveQuestion(row)">归档</el-button>
               </template>
             </el-table-column>
@@ -124,7 +131,11 @@
           <StateBlock v-else-if="errorExams && !exams.length" state="error" title="试卷列表加载失败" @retry="loadExams" />
           <el-table v-else :data="exams" v-loading="loadingExams">
             <el-table-column prop="id" label="ID" width="70" />
-            <el-table-column prop="title" label="试卷" min-width="200" />
+            <el-table-column label="试卷" min-width="200">
+              <template #default="{ row }">
+                <el-button link type="primary" @click="openExamDetail(row)">{{ row.title }}</el-button>
+              </template>
+            </el-table-column>
             <el-table-column label="课程" width="150">
               <template #default="{ row }">{{ courseName(row.course_id) }}</template>
             </el-table-column>
@@ -141,8 +152,9 @@
             <el-table-column label="截止" width="160">
               <template #default="{ row }">{{ formatTime(row.due_at) }}</template>
             </el-table-column>
-            <el-table-column label="操作" width="230" fixed="right">
+            <el-table-column label="操作" width="290" fixed="right">
               <template #default="{ row }">
+                <el-button link type="primary" @click="openExamDetail(row)">详情</el-button>
                 <el-button link type="primary" @click="openResults(row)">成绩</el-button>
                 <el-button v-if="row.status === 'draft'" link type="success" @click="publishExam(row)">发布</el-button>
                 <el-button v-if="row.status === 'published'" link type="warning" @click="closeExam(row)">关闭</el-button>
@@ -563,6 +575,7 @@
 
 <script setup>
 import { ref, reactive, onMounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { examApi } from '../../api/exams'
 import { teacherApi } from '../../api/teacher'
@@ -574,6 +587,7 @@ const courses = ref([])
 const classes = ref([])
 const courseId = ref(null)
 const tab = ref('questions')
+const router = useRouter()
 
 const questions = ref([])
 const exams = ref([])
@@ -673,6 +687,14 @@ function typeLabel(t) {
 
 function typeTag(t) {
   return { single: '', multiple: 'success', judge: 'warning', short: 'info' }[t] || 'info'
+}
+
+function openQuestionDetail(row) {
+  router.push(`/teacher/questions/${row.id}`)
+}
+
+function openExamDetail(row) {
+  router.push(`/teacher/exams/${row.id}`)
 }
 
 function examStatusLabel(s) {
@@ -1201,6 +1223,13 @@ async function confirmGrade() {
 
 <style scoped>
 .tip { margin-bottom: var(--sp-3); }
+.stem-link {
+  padding: 0;
+  height: auto;
+  line-height: 1.6;
+  white-space: normal;
+  text-align: left;
+}
 .option-row { display: flex; align-items: center; gap: var(--sp-2); width: 100%; }
 .unit { margin-left: var(--sp-2); font-size: var(--fs-xs); color: var(--text-secondary); }
 .ml { margin-left: var(--sp-3); }

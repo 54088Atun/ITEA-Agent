@@ -31,7 +31,9 @@
               <el-tag :type="row.kind === 'exam' ? 'danger' : ''" size="small" effect="light">
                 {{ row.kind === 'exam' ? '考试' : '作业' }}
               </el-tag>
-              <span>{{ row.title }}</span>
+              <span>
+                <el-button link type="primary" @click="openDetail(row)">{{ row.title }}</el-button>
+              </span>
             </div>
           </template>
         </el-table-column>
@@ -67,9 +69,9 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="240" fixed="right">
+        <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" @click="openSubmissions(row)">提交情况</el-button>
+            <el-button link type="primary" @click="openDetail(row)">查看详情</el-button>
             <el-button v-if="row.status === 'draft'" link type="success" @click="publish(row)">发布</el-button>
             <el-button v-if="row.status !== 'closed'" link type="warning" @click="close(row)">关闭</el-button>
           </template>
@@ -199,6 +201,7 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { teacherApi } from '../../api/teacher'
 import { classroomApi } from '../../api/classroom'
@@ -210,6 +213,7 @@ const courses = ref([])
 const classes = ref([])
 const loading = ref(false)
 const error = ref(false)
+const router = useRouter()
 
 const createVisible = ref(false)
 const saving = ref(false)
@@ -361,6 +365,10 @@ async function openSubmissions(row) {
   } catch { /* 拦截器已提示 */ } finally {
     detailLoading.value = false
   }
+}
+
+function openDetail(row) {
+  router.push(`/teacher/assignments/${row.id}`)
 }
 
 async function aiGrade(row) {

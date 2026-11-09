@@ -342,3 +342,34 @@ def preview_material(
         filename=path.name,
         content_disposition_type="inline",
     )
+
+
+@router.get("/{course_id}/materials/{material_id}/text")
+def material_text(
+    course_id: int,
+    material_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """素材解析文本:Office 等浏览器无法直接渲染的文件用它做文字预览"""
+    assert_course_visible(user, course_id, db)
+    material = db.query(CourseMaterial).filter(
+        CourseMaterial.id == material_id,
+        CourseMaterial.course_id == course_id,
+    ).first()
+    if not material:
+        raise HTTPException(status_code=404, detail="素材不存在")
+    if (
+        user.role not in ("teacher", "admin")
+        and material.moderation_status == "rejected"
+    ):
+        raise HTTPException(status_code=403, detail="素材未通过内容审核")
+
+    job = db.query(MaterialParseJob).filter(
+        MaterialParseJob.material_id == material.id,
+    ).first()
+    return {
+        "material_id": material.id,
+        "status": job.status if job else None,
+        "text": (job.result_text if job else "") or "",
+    }

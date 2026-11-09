@@ -36,6 +36,14 @@ export const courseApi = {
   retryMaterialParse(id, materialId) {
     return http.post(`/course/${id}/materials/${materialId}/parse/retry`)
   },
+  /** 素材原文地址(同源 Cookie 鉴权,可直接给 iframe/img 使用) */
+  materialPreviewUrl(id, materialId) {
+    return `/api/course/${id}/materials/${materialId}/preview`
+  },
+  /** 解析文本:Office/压缩包等无法直接渲染的文件用它做文字预览 */
+  materialText(id, materialId) {
+    return http.get(`/course/${id}/materials/${materialId}/text`)
+  },
   uploadMaterial(id, type, title, file) {
     const form = new FormData()
     form.append('type', type)

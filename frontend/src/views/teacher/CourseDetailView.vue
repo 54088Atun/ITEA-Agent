@@ -72,20 +72,24 @@
             <span class="filter-bar__count">共 {{ knowledgePoints.length }} 个知识点</span>
           </div>
 
-          <div class="panel">
-            <el-table :data="knowledgePoints">
-              <el-table-column prop="name" label="知识点" min-width="180" />
-              <el-table-column label="上级知识点" width="180">
-                <template #default="{ row }">
-                  <span v-if="row.parent_id">{{ kpName(row.parent_id) }}</span>
-                  <span v-else class="dim">—</span>
-                </template>
-              </el-table-column>
-              <el-table-column prop="description" label="描述" min-width="240" show-overflow-tooltip />
-              <template #empty>
-                <StateBlock state="empty" title="暂无知识点" />
+          <div class="panel kp-panel">
+            <p class="kp-hint">按层级折叠展示，点击节点可展开或收起</p>
+            <el-tree
+              v-if="kpTree.length"
+              :data="kpTree"
+              node-key="id"
+              :props="{ label: 'name', children: 'children' }"
+              :default-expanded-keys="kpRootKeys"
+              :expand-on-click-node="true"
+            >
+              <template #default="{ data }">
+                <div class="kp-node">
+                  <span class="kp-node__name">{{ data.name }}</span>
+                  <span v-if="data.description" class="kp-node__desc">{{ data.description }}</span>
+                </div>
               </template>
-            </el-table>
+            </el-tree>
+            <StateBlock v-else state="empty" title="暂无知识点" />
           </div>
         </div>
       </el-tab-pane>
@@ -104,7 +108,11 @@
 
           <div class="panel">
             <el-table :data="materials">
-              <el-table-column prop="title" label="资料标题" min-width="200" />
+              <el-table-column label="资料标题" min-width="200">
+                <template #default="{ row }">
+                  <el-button link type="primary" @click="openPreview(row)">{{ row.title }}</el-button>
+                </template>
+              </el-table-column>
               <el-table-column label="类型" width="120">
                 <template #default="{ row }">
                   <el-tag :type="typeTag(row.type)" size="small" effect="light">{{ typeLabel(row.type) }}</el-tag>
@@ -133,10 +141,11 @@
               <el-table-column label="上传时间" width="180">
                 <template #default="{ row }">{{ formatTime(row.uploaded_at) }}</template>
               </el-table-column>
-              <el-table-column label="操作" width="100" fixed="right">
+              <el-table-column label="操作" width="160">
                 <template #default="{ row }">
+                  <el-button link type="primary" @click="openPreview(row)">查看</el-button>
                   <el-button
-                    v-if="canRetryParse(row)" link type="primary"
+                    v-if="canRetryParse(row)" link type="warning"
                     @click="retryParse(row)"
                   >
                     重新解析
@@ -278,11 +287,48 @@
       </el-table>
       <p class="share-hint">对方凭码复制为课程快照，只包含课程信息、知识点与资料元数据，不会带走本课程的学生、学情与作业数据。</p>
     </el-dialog>
+
+    <!-- 资料预览:PDF/图片直接渲染,其他文件展示解析文本 -->
+    <el-dialog
+      v-model="previewVisible"
+      :title="previewMaterial?.title || '资料预览'"
+      width="min(880px, 92vw)"
+      destroy-on-close
+    >
+      <div v-loading="previewLoading" class="preview-body">
+        <iframe
+          v-if="previewKind === 'pdf'"
+          :src="previewUrl"
+          class="preview-frame"
+          title="资料预览"
+        ></iframe>
+        <img
+          v-else-if="previewKind === 'image'"
+          :src="previewUrl"
+          class="preview-image"
+          alt="资料预览"
+        />
+        <template v-else>
+          <pre v-if="previewText" class="preview-text">{{ previewText }}</pre>
+          <StateBlock
+            v-else
+            state="empty"
+            title="暂无可展示的文本"
+            hint="该文件可能仍在解析中，可尝试新窗口打开原文"
+          />
+        </template>
+      </div>
+      <template #footer>
+        <span class="preview-hint">{{ previewFileName }}</span>
+        <el-button @click="previewVisible = false">关闭</el-button>
+        <el-button type="primary" @click="openInNewTab">新窗口打开</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { courseApi } from '../../api/course'
@@ -301,6 +347,39 @@ const course = ref(null)
 const tab = ref('kp')
 const knowledgePoints = ref([])
 const materials = ref([])
+
+// 知识点按 parent_id 构建层级,交由 el-tree 折叠展示
+const kpTree = computed(() => {
+  const nodes = new Map()
+  knowledgePoints.value.forEach((kp) => {
+    nodes.set(kp.id, { ...kp, children: [] })
+  })
+  const roots = []
+  nodes.forEach((node) => {
+    if (node.parent_id && nodes.has(node.parent_id)) {
+      nodes.get(node.parent_id).children.push(node)
+    } else {
+      roots.push(node)
+    }
+  })
+  return roots
+})
+
+// 默认只展开顶层，下级保持折叠，深层知识点较多的课程更清爽
+const kpRootKeys = computed(() => kpTree.value.map((node) => node.id))
+
+// ---------- 资料预览 ----------
+const previewVisible = ref(false)
+const previewLoading = ref(false)
+const previewMaterial = ref(null)
+const previewKind = ref('text')
+const previewUrl = ref('')
+const previewText = ref('')
+const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif']
+const previewFileName = computed(() => {
+  const path = previewMaterial.value?.file_path || ''
+  return path.split(/[\\/]/).pop() || ''
+})
 
 const kpDialog = ref(false)
 const kpLoading = ref(false)
@@ -406,8 +485,36 @@ async function saveInfo() {
   }
 }
 
-function kpName(id) {
-  return knowledgePoints.value.find((kp) => kp.id === id)?.name || `#${id}`
+function materialExt(row) {
+  const path = row?.file_path || row?.title || ''
+  const match = String(path).match(/\.([a-z0-9]+)$/i)
+  return match ? match[1].toLowerCase() : ''
+}
+
+async function openPreview(row) {
+  previewMaterial.value = row
+  previewVisible.value = true
+  previewLoading.value = true
+  previewText.value = ''
+  previewUrl.value = courseApi.materialPreviewUrl(courseId, row.id)
+  const ext = materialExt(row)
+  previewKind.value = ext === 'pdf' ? 'pdf' : IMAGE_EXTS.includes(ext) ? 'image' : 'text'
+  if (previewKind.value !== 'text') {
+    previewLoading.value = false
+    return
+  }
+  try {
+    const data = await courseApi.materialText(courseId, row.id)
+    previewText.value = data?.text || ''
+  } catch {
+    previewText.value = ''
+  } finally {
+    previewLoading.value = false
+  }
+}
+
+function openInNewTab() {
+  if (previewUrl.value) window.open(previewUrl.value, '_blank', 'noopener')
 }
 
 function typeLabel(t) {
@@ -657,4 +764,31 @@ async function retryParse(row) {
 .dim { color: var(--text-placeholder); }
 .share-form { margin-bottom: var(--sp-2); }
 .share-hint { margin-top: var(--sp-3); font-size: var(--fs-xs); color: var(--text-secondary); }
+.kp-panel { padding: var(--sp-4); }
+.kp-hint { margin: 0 0 var(--sp-2); font-size: var(--fs-xs); color: var(--text-secondary); }
+.kp-node { display: flex; align-items: baseline; gap: var(--sp-2); min-width: 0; }
+.kp-node__name { color: var(--text-primary); }
+.kp-node__desc {
+  color: var(--text-placeholder);
+  font-size: var(--fs-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.preview-body { min-height: 240px; }
+.preview-frame { width: 100%; height: 68vh; border: 0; }
+.preview-image { display: block; max-width: 100%; margin: 0 auto; }
+.preview-text {
+  max-height: 62vh;
+  overflow: auto;
+  margin: 0;
+  padding: var(--sp-3);
+  background: var(--bg-subtle);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.preview-hint { margin-right: auto; font-size: var(--fs-xs); color: var(--text-secondary); }
 </style>

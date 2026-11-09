@@ -59,6 +59,7 @@
         </div>
 
         <footer class="class-card__actions">
+          <el-button link type="primary" size="small" @click="openDetail(row)">详情</el-button>
           <el-button link type="primary" size="small" @click="openReport(row)">学情</el-button>
           <el-button link type="primary" size="small" @click="openMembers(row)">成员</el-button>
           <el-button link type="primary" size="small" @click="openAnnouncements(row)">公告</el-button>
@@ -450,6 +451,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { classroomApi } from '../../api/classroom'
 import { courseApi } from '../../api/course'
@@ -459,6 +461,7 @@ import SkeletonCard from '../../components/SkeletonCard.vue'
 import StateBlock from '../../components/StateBlock.vue'
 
 const userStore = useUserStore()
+const router = useRouter()
 
 const ROLE_LABELS = {
   head_teacher: '班主任',
@@ -808,6 +811,10 @@ async function openMembers(row) {
   current.value = row
   membersVisible.value = true
   await loadMembers()
+}
+
+function openDetail(row) {
+  router.push(`/teacher/classes/${row.id}`)
 }
 
 async function openReport(row) {

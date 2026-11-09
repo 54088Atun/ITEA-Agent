@@ -321,6 +321,17 @@ def list_questions(
     return [_q_out(q, with_answer=True) for q in rows]
 
 
+@router.get("/teacher/questions/{question_id}")
+def get_question(
+    question_id: int,
+    teacher: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """单题详情:含答案与解析,供题目详情页直接打开"""
+    q = _owned_question(db, question_id, teacher)
+    return _q_out(q, with_answer=True)
+
+
 @router.put("/teacher/questions/{question_id}")
 def update_question(
     question_id: int,

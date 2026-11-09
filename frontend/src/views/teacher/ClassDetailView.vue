@@ -1,0 +1,335 @@
+<template>
+  <div class="page">
+    <div class="page-head">
+      <div class="page-head__main">
+        <el-button link class="back-link" @click="router.push('/teacher/classes')">
+          <el-icon><ArrowLeft /></el-icon> 返回班级列表
+        </el-button>
+        <h2 class="page-title">{{ classroom?.name || '班级详情' }}</h2>
+        <p class="page-sub">
+          {{ classroom?.course_name || '未绑定课程' }} · {{ classroom?.semester || '未设置学期' }}
+        </p>
+      </div>
+      <div v-if="classroom" class="page-head__actions">
+        <el-tag :type="classroom.status === 'active' ? 'success' : 'info'" size="small" effect="light">
+          {{ classroom.status === 'active' ? '进行中' : '已归档' }}
+        </el-tag>
+        <el-button @click="copyCode">复制课程码 {{ classroom.invite_code }}</el-button>
+      </div>
+    </div>
+
+    <div v-if="loading && !classroom" class="panel">
+      <SkeletonTable :rows="5" :cols="4" />
+    </div>
+    <StateBlock v-else-if="error && !classroom" state="error" title="班级详情加载失败" @retry="load" />
+    <template v-else>
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <span>学生人数</span>
+          <strong>{{ classroom.member_count }} / {{ classroom.max_students }}</strong>
+        </div>
+        <div class="kpi-card">
+          <span>平均学习进度</span>
+          <strong>{{ report?.avg_progress ?? 0 }}%</strong>
+        </div>
+        <div class="kpi-card">
+          <span>待确认作业</span>
+          <strong>{{ pendingAssignments }}</strong>
+        </div>
+        <div class="kpi-card">
+          <span>待批改考试</span>
+          <strong>{{ pendingExams }}</strong>
+        </div>
+      </div>
+
+      <el-tabs v-model="tab">
+        <el-tab-pane label="班级概况" name="info">
+          <div class="tab-body">
+            <div class="panel">
+              <div class="panel__head">
+                <span class="panel__title">基本信息</span>
+              </div>
+              <el-descriptions :column="descColumns" border size="small">
+                <el-descriptions-item label="班级名称">{{ classroom.name }}</el-descriptions-item>
+                <el-descriptions-item label="班主任">{{ classroom.teacher_name || '—' }}</el-descriptions-item>
+                <el-descriptions-item label="绑定课程">{{ classroom.course_name || '未绑定' }}</el-descriptions-item>
+                <el-descriptions-item label="学期">{{ classroom.semester || '—' }}</el-descriptions-item>
+                <el-descriptions-item label="课程码">{{ classroom.invite_code }}</el-descriptions-item>
+                <el-descriptions-item label="创建时间">{{ formatTime(classroom.created_at) }}</el-descriptions-item>
+                <el-descriptions-item label="班级说明" :span="2">
+                  {{ classroom.description || '暂无说明' }}
+                </el-descriptions-item>
+              </el-descriptions>
+            </div>
+
+            <div class="panel">
+              <div class="panel__head">
+                <span class="panel__title">班级公告</span>
+              </div>
+              <div v-if="announcements.length" class="ann-list">
+                <article v-for="a in announcements" :key="a.id" class="ann-item">
+                  <div class="ann-item__head">
+                    <strong>{{ a.author_name }}</strong>
+                    <span>{{ formatTime(a.created_at) }}</span>
+                  </div>
+                  <p>{{ a.content }}</p>
+                </article>
+              </div>
+              <StateBlock v-else state="empty" title="暂无公告" />
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane :label="`成员（${members.length}）`" name="members">
+          <div class="panel">
+            <el-table :data="members" v-loading="membersLoading">
+              <el-table-column prop="name" label="姓名" min-width="110">
+                <template #default="{ row }">
+                  <el-button link type="primary" @click="openMember(row)">{{ row.name }}</el-button>
+                </template>
+              </el-table-column>
+              <el-table-column prop="email" label="邮箱" min-width="180" show-overflow-tooltip />
+              <el-table-column label="角色" width="110">
+                <template #default="{ row }">
+                  <el-tag size="small" effect="light" :type="row.member_type === 'teacher' ? 'warning' : 'info'">
+                    {{ roleLabel(row.role) }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="头衔" min-width="120">
+                <template #default="{ row }">{{ row.title || '—' }}</template>
+              </el-table-column>
+              <el-table-column label="学习进度" width="110">
+                <template #default="{ row }">{{ progressOf(row) }}%</template>
+              </el-table-column>
+              <el-table-column label="薄弱知识点" width="110">
+                <template #default="{ row }">{{ weakOf(row) }}</template>
+              </el-table-column>
+              <el-table-column label="状态" width="90">
+                <template #default="{ row }">
+                  <el-tag :type="row.status === 'active' ? 'success' : 'info'" size="small" effect="light">
+                    {{ row.status === 'active' ? '在班' : '已退出' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="90">
+                <template #default="{ row }">
+                  <el-button link type="primary" @click="openMember(row)">详情</el-button>
+                </template>
+              </el-table-column>
+              <template #empty>
+                <StateBlock state="empty" title="暂无成员" hint="可复制课程码发给学生加入班级" />
+              </template>
+            </el-table>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="学情与任务" name="stats">
+          <div class="tab-body">
+            <div class="panel">
+              <div class="panel__head">
+                <span class="panel__title">薄弱知识点</span>
+              </div>
+              <el-table :data="report?.weak_points || []" size="small" empty-text="暂无掌握度数据">
+                <el-table-column prop="kp_name" label="知识点" min-width="180" />
+                <el-table-column prop="avg_mastery" label="平均掌握度" width="120" />
+                <el-table-column prop="wrong_count" label="错题数" width="100" />
+              </el-table>
+            </div>
+
+            <div class="panel">
+              <div class="panel__head">
+                <span class="panel__title">作业统计</span>
+              </div>
+              <el-table :data="report?.assignments || []" size="small" empty-text="本班暂无作业">
+                <el-table-column label="作业" min-width="180">
+                  <template #default="{ row }">
+                    <el-button link type="primary" @click="openAssignment(row)">{{ row.title }}</el-button>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="submitted" label="提交" width="80" />
+                <el-table-column prop="confirmed" label="已确认" width="90" />
+                <el-table-column prop="pending" label="待批改" width="90" />
+                <el-table-column label="平均分" width="90">
+                  <template #default="{ row }">{{ row.avg_score ?? '—' }}</template>
+                </el-table-column>
+              </el-table>
+            </div>
+
+            <div class="panel">
+              <div class="panel__head">
+                <span class="panel__title">考试统计</span>
+              </div>
+              <el-table :data="report?.exams || []" size="small" empty-text="本班暂无考试">
+                <el-table-column label="试卷" min-width="180">
+                  <template #default="{ row }">
+                    <el-button link type="primary" @click="openExam(row)">{{ row.title }}</el-button>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="submitted" label="提交" width="80" />
+                <el-table-column prop="pending_manual" label="待批改" width="90" />
+                <el-table-column label="平均分" width="90">
+                  <template #default="{ row }">{{ row.avg_score ?? '—' }}</template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
+    </template>
+  </div>
+</template>
+
+<script setup>
+import { computed, ref, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { classroomApi } from '../../api/classroom'
+import SkeletonTable from '../../components/SkeletonTable.vue'
+import StateBlock from '../../components/StateBlock.vue'
+
+const route = useRoute()
+const router = useRouter()
+const classId = Number(route.params.id)
+const descColumns = window.matchMedia('(max-width: 767px)').matches ? 1 : 2
+
+const loading = ref(true)
+const error = ref(false)
+const tab = ref('info')
+const classroom = ref(null)
+const members = ref([])
+const membersLoading = ref(false)
+const report = ref(null)
+const announcements = ref([])
+
+const ROLE_LABELS = {
+  head_teacher: '班主任',
+  teacher: '任课教师',
+  monitor: '班长',
+  representative: '课代表',
+  student: '普通学生',
+  custom: '自定义',
+}
+
+const progressMap = computed(() => {
+  const map = {}
+  for (const row of report.value?.students || []) map[row.user_id] = row
+  return map
+})
+
+const pendingAssignments = computed(() =>
+  (report.value?.assignments || []).reduce((sum, row) => sum + (row.pending || 0), 0),
+)
+const pendingExams = computed(() =>
+  (report.value?.exams || []).reduce((sum, row) => sum + (row.pending_manual || 0), 0),
+)
+
+onMounted(load)
+
+async function load() {
+  error.value = false
+  loading.value = true
+  try {
+    classroom.value = await classroomApi.detail(classId)
+  } catch {
+    error.value = true
+    loading.value = false
+    return
+  }
+  loading.value = false
+  loadAux()
+}
+
+async function loadAux() {
+  membersLoading.value = true
+  const [memberRes, reportRes, annRes] = await Promise.allSettled([
+    classroomApi.members(classId),
+    classroomApi.report(classId),
+    classroomApi.announcements(classId),
+  ])
+  if (memberRes.status === 'fulfilled') members.value = memberRes.value.items || []
+  if (reportRes.status === 'fulfilled') report.value = reportRes.value
+  if (annRes.status === 'fulfilled') announcements.value = Array.isArray(annRes.value) ? annRes.value : []
+  membersLoading.value = false
+}
+
+function roleLabel(role) {
+  return ROLE_LABELS[role] || role || '—'
+}
+
+function progressOf(row) {
+  return progressMap.value[row.student_id]?.overall_progress ?? 0
+}
+
+function weakOf(row) {
+  const value = progressMap.value[row.student_id]?.weak_count
+  return value === undefined ? '—' : value
+}
+
+function formatTime(value) {
+  if (!value) return '—'
+  return String(value).replace('T', ' ').slice(0, 16)
+}
+
+async function copyCode() {
+  const code = classroom.value?.invite_code
+  if (!code) return
+  try {
+    await navigator.clipboard.writeText(code)
+    ElMessage.success(`课程码 ${code} 已复制`)
+  } catch {
+    ElMessage.info(`课程码：${code}`)
+  }
+}
+
+function openMember(row) {
+  router.push(`/teacher/classes/${classId}/members/${row.student_id}`)
+}
+
+function openAssignment(row) {
+  router.push(`/teacher/assignments/${row.assignment_id}`)
+}
+
+function openExam(row) {
+  router.push(`/teacher/exams/${row.exam_id}`)
+}
+</script>
+
+<style scoped>
+.back-link { padding: 0; margin-bottom: var(--sp-1); color: var(--text-secondary); }
+.tab-body { display: flex; flex-direction: column; gap: var(--sp-4); }
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+}
+.kpi-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--sp-4);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-xs);
+}
+.kpi-card span { font-size: var(--fs-xs); color: var(--text-secondary); }
+.kpi-card strong { font-size: var(--fs-xl); color: var(--text-primary); }
+.ann-list { display: flex; flex-direction: column; gap: var(--sp-3); }
+.ann-item {
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: var(--sp-3);
+  background: var(--bg-elevated);
+}
+.ann-item__head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-1);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+.ann-item p { margin: 0; white-space: pre-wrap; line-height: 1.7; color: var(--text-primary); }
+</style>
