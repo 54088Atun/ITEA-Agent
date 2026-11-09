@@ -71,10 +71,14 @@ async def reflect_node(state: AgentState) -> dict:
         }
 
     # ---- 第一道:规则快检 ----
-    # admin 分支与"无可见课程"的通用问答不做 RAG 必备检查,否则会反复重写
+    # admin 分支、无可见课程、课程无检索资料时都不做 RAG 必备检查,否则会反复重写
     is_admin = state.get("branch") == "admin"
     has_course = bool(state.get("course_id"))
-    issues = _quick_checks(output, rag_context, require_rag=not (is_admin or not has_course))
+    retrieval_ready = bool(state.get("retrieval_available", True))
+    issues = _quick_checks(
+        output, rag_context,
+        require_rag=not (is_admin or not has_course or not retrieval_ready),
+    )
 
     # ---- 第二道:LLM 深度复核(仅当快检有疑点或专业输出时触发)----
     if issues or rag_context.strip():
@@ -82,6 +86,8 @@ async def reflect_node(state: AgentState) -> dict:
             hallucination_rule = "平台解读是否有给定统计快照依据"
         elif not has_course:
             hallucination_rule = "是否避免编造课程事实与个人学情(当前无课程资料)"
+        elif not retrieval_ready:
+            hallucination_rule = "是否避免编造课程事实与引用(当前课程尚未配置可检索资料)"
         else:
             hallucination_rule = "专业知识点是否有知识库依据(下方提供检索上下文)"
         reflect_prompt = (
