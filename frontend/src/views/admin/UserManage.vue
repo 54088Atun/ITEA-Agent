@@ -85,8 +85,9 @@
         <el-table-column label="创建时间" width="180">
           <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="300" fixed="right">
+        <el-table-column label="操作" width="340" fixed="right">
           <template #default="{ row }">
+            <el-button link type="primary" @click="openOverview(row)">概览</el-button>
             <template v-if="userStore.canAdminWrite && (userStore.isSuperAdmin || row.role !== 'admin')">
               <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
               <el-button link type="warning" @click="openReset(row)">重置密码</el-button>
@@ -222,6 +223,71 @@
         <el-button type="primary" :loading="saving" @click="saveLevel">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 用户概览 -->
+    <el-drawer
+      v-model="overviewVisible"
+      :title="`用户概览 · ${overviewData?.user?.name || ''}`"
+      size="640px"
+    >
+      <div v-loading="overviewLoading" class="ov-body">
+        <template v-if="overviewData">
+          <el-descriptions :column="2" border size="small">
+            <el-descriptions-item label="ID">{{ overviewData.user.id }}</el-descriptions-item>
+            <el-descriptions-item label="角色">{{ roleLabel(overviewData.user.role) }}</el-descriptions-item>
+            <el-descriptions-item label="姓名">{{ overviewData.user.name }}</el-descriptions-item>
+            <el-descriptions-item label="邮箱">{{ overviewData.user.email }}</el-descriptions-item>
+            <el-descriptions-item label="状态">
+              {{ overviewData.user.status === 'active' ? '正常' : '已禁用' }}
+            </el-descriptions-item>
+            <el-descriptions-item label="注册时间">{{ formatTime(overviewData.user.created_at) }}</el-descriptions-item>
+          </el-descriptions>
+
+          <section class="ov-section">
+            <h4 class="ov-title">关联课程（{{ overviewData.courses.length }}）</h4>
+            <el-table :data="overviewData.courses" size="small" empty-text="无关联课程">
+              <el-table-column prop="name" label="课程" min-width="160" />
+              <el-table-column prop="code" label="代码" width="100" />
+              <el-table-column label="关系" width="80">
+                <template #default="{ row }">
+                  {{ row.relation === 'owner' ? '创建' : '加入' }}
+                </template>
+              </el-table-column>
+              <el-table-column label="审核" width="90">
+                <template #default="{ row }">{{ row.audit_status }}</template>
+              </el-table-column>
+            </el-table>
+          </section>
+
+          <section class="ov-section">
+            <h4 class="ov-title">风控命中（{{ overviewData.risk_hits.total }}）</h4>
+            <el-table :data="overviewData.risk_hits.recent" size="small" empty-text="无风险记录">
+              <el-table-column prop="risk_type" label="类型" width="120" />
+              <el-table-column prop="action_taken" label="处置" width="110" />
+              <el-table-column prop="request_content" label="请求内容" min-width="200" show-overflow-tooltip />
+              <el-table-column label="时间" width="150">
+                <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+              </el-table-column>
+            </el-table>
+          </section>
+
+          <section class="ov-section">
+            <h4 class="ov-title">最近操作（{{ overviewData.recent_actions.length }}）</h4>
+            <el-table :data="overviewData.recent_actions" size="small" empty-text="暂无操作记录">
+              <el-table-column prop="action" label="动作" width="150" />
+              <el-table-column label="对象" width="140">
+                <template #default="{ row }">
+                  {{ row.target_type || '—' }}{{ row.target_id ? ` #${row.target_id}` : '' }}
+                </template>
+              </el-table-column>
+              <el-table-column label="时间" width="150">
+                <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+              </el-table-column>
+            </el-table>
+          </section>
+        </template>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -269,6 +335,11 @@ const newPassword = ref('')
 const levelVisible = ref(false)
 const levelTarget = ref(null)
 const levelForm = reactive({ admin_level: 'normal' })
+
+// 用户概览
+const overviewVisible = ref(false)
+const overviewLoading = ref(false)
+const overviewData = ref(null)
 
 onMounted(load)
 
@@ -383,29 +454,47 @@ async function toggleStatus(row) {
   } catch { /* 拦截器已提示 */ }
 }
 
-/** 批量启停：逐条调用现有单条接口，统计成功数 */
+/** 批量启停：先 dry_run 预演，确认后一次性执行；跳过项展示原因 */
 async function batchStatus(target) {
   const ids = [...selectedIds.value]
   if (!ids.length) return
   const label = target === 'active' ? '启用' : '禁用'
+
+  let preview
   try {
-    await ElMessageBox.confirm(`确认${label}选中的 ${ids.length} 个账号?`, '批量操作', { type: 'warning' })
+    preview = await adminApi.batchUserStatus(ids, target, true)
   } catch { return }
 
-  let ok = 0
-  for (const id of ids) {
-    try {
-      await adminApi.setUserStatus(id, target)
-      ok++
-    } catch { /* 单条失败不中断 */ }
+  const affected = preview.affected || []
+  const skipped = preview.skipped || []
+  const failed = preview.failed || []
+  if (!affected.length) {
+    ElMessage.warning(`没有可${label}的账号（跳过 ${skipped.length} 个，失败 ${failed.length} 个）`)
+    clearSelection()
+    load()
+    return
   }
-  if (ok === ids.length) {
-    ElMessage.success(`已${label} ${ok} 个账号`)
-  } else {
-    ElMessage.warning(`${label}成功 ${ok} 个，失败 ${ids.length - ok} 个`)
-  }
-  clearSelection()
-  load()
+
+  const lines = [`将${label} ${affected.length} 个账号`]
+  if (skipped.length) lines.push(`跳过 ${skipped.length} 个：${skipped[0].reason}`)
+  if (failed.length) lines.push(`失败 ${failed.length} 个：${failed[0].reason}`)
+  try {
+    await ElMessageBox.confirm(lines.join('；'), '批量操作预演', { type: 'warning' })
+  } catch { return }
+
+  try {
+    const result = await adminApi.batchUserStatus(ids, target, false)
+    const ok = (result.affected || []).length
+    const skip = (result.skipped || []).length
+    const fail = (result.failed || []).length
+    if (skip || fail) {
+      ElMessage.warning(`已${label} ${ok} 个，跳过 ${skip} 个，失败 ${fail} 个`)
+    } else {
+      ElMessage.success(`已${label} ${ok} 个账号`)
+    }
+    clearSelection()
+    load()
+  } catch { /* 拦截器已提示 */ }
 }
 
 function openReset(row) {
@@ -443,6 +532,18 @@ async function saveLevel() {
     load()
   } catch { /* 拦截器已提示 */ } finally {
     saving.value = false
+  }
+}
+
+/** 用户概览：基础信息 + 关联课程 + 风控命中 + 最近操作 */
+async function openOverview(row) {
+  overviewData.value = null
+  overviewVisible.value = true
+  overviewLoading.value = true
+  try {
+    overviewData.value = await adminApi.userOverview(row.id)
+  } catch { /* 拦截器已提示 */ } finally {
+    overviewLoading.value = false
   }
 }
 </script>
@@ -485,5 +586,15 @@ async function saveLevel() {
   justify-content: flex-end;
   padding: var(--sp-3) var(--sp-5);
   border-top: 1px solid var(--border);
+}
+
+/* 用户概览抽屉 */
+.ov-body { display: flex; flex-direction: column; gap: var(--sp-4); min-height: 120px; }
+.ov-section { display: flex; flex-direction: column; gap: var(--sp-2); }
+.ov-title {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-primary);
 }
 </style>

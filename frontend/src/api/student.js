@@ -1,6 +1,18 @@
 import http from './http'
 
 export const studentApi = {
+  /** 学习总览:进度、薄弱点、到期复习、待交作业、待考考试一次返回 */
+  learningOverview(courseId) {
+    return http.get('/student/learning-overview', {
+      params: { course_id: courseId || undefined },
+    })
+  },
+  /** 下一步建议:按截止时间与薄弱程度排序,不调用模型 */
+  recommendations(courseId, limit = 8) {
+    return http.get('/student/recommendations', {
+      params: { course_id: courseId || undefined, limit },
+    })
+  },
   /** 我的课程(已加入) → [{id, name, code, syllabus, semester, overall_progress}] */
   courses() {
     return http.get('/student/courses')

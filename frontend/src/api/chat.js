@@ -26,6 +26,12 @@ export const chatApi = {
   setFavorite(sessionId, favorite) {
     return http.patch(`/chat/conversations/${sessionId}/favorite`, { favorite })
   },
+  /** 人工调整会话信息分级(教师/管理员):full / auto / manual / confidential */
+  setSecurityLevel(sessionId, securityLevel) {
+    return http.patch(`/chat/conversations/${sessionId}/security-level`, {
+      security_level: securityLevel,
+    })
+  },
   /** 生成或读取会话摘要 */
   summarize(sessionId, refresh = false) {
     return http.post(`/chat/conversations/${sessionId}/summary`, null, {

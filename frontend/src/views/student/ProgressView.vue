@@ -80,6 +80,33 @@
             </div>
           </div>
 
+          <!-- 学习总览与下一步建议 -->
+          <div class="panel">
+            <div class="panel__head">
+              <span class="panel__title">下一步建议</span>
+              <span class="panel__hint">
+                到期复习 {{ summary.due_reviews }} · 待交作业 {{ summary.pending_assignments }} · 待考考试 {{ summary.pending_exams }} · 薄弱点 {{ summary.weak_points }}
+              </span>
+            </div>
+            <div class="panel__body">
+              <ul v-if="recommendations.length" class="rec-list">
+                <li v-for="item in recommendations" :key="`${item.type}-${item.course_id}-${item.target_id}-${item.title}`" class="rec">
+                  <el-tag :type="priorityTag(item.priority)" size="small" effect="light">
+                    {{ priorityLabel(item.priority) }}
+                  </el-tag>
+                  <div class="rec__main">
+                    <div class="rec__title">{{ item.title }}</div>
+                    <div class="rec__meta">
+                      {{ item.reason }}<span v-if="item.due_at"> · 截止 {{ formatTime(item.due_at) }}</span>
+                    </div>
+                  </div>
+                  <el-button size="small" plain type="primary" @click="goRecommendation(item)">去处理</el-button>
+                </li>
+              </ul>
+              <div v-else class="empty-state">暂无待办建议，保持当前节奏即可</div>
+            </div>
+          </div>
+
           <!-- 掌握度分布 + 明细 -->
           <div class="panel">
             <div class="panel__head">
@@ -173,6 +200,8 @@ const courses = ref([])
 const joinedIds = ref([])
 const courseId = ref(null)
 const progress = ref(null)
+const overview = ref(null)
+const recommendations = ref([])
 const loading = ref(false)
 
 const practiceVisible = ref(false)
@@ -215,9 +244,43 @@ async function load() {
   if (!courseId.value) return
   loading.value = true
   try {
-    progress.value = await studentApi.progress(courseId.value)
-  } catch { /* 拦截器已提示 */ } finally {
+    const [progressRes, overviewRes, recRes] = await Promise.allSettled([
+      studentApi.progress(courseId.value),
+      studentApi.learningOverview(courseId.value),
+      studentApi.recommendations(courseId.value, 8),
+    ])
+    if (progressRes.status === 'fulfilled') progress.value = progressRes.value
+    if (overviewRes.status === 'fulfilled') overview.value = overviewRes.value
+    recommendations.value = recRes.status === 'fulfilled' ? (recRes.value.items || []) : []
+  } finally {
     loading.value = false
+  }
+}
+
+const summary = computed(() => overview.value?.summary || {
+  weak_points: 0,
+  due_reviews: 0,
+  pending_assignments: 0,
+  pending_exams: 0,
+})
+
+function priorityTag(priority) {
+  return { high: 'danger', medium: 'warning', low: 'info' }[priority] || 'info'
+}
+function priorityLabel(priority) {
+  return { high: '高', medium: '中', low: '低' }[priority] || priority
+}
+function formatTime(t) {
+  if (!t) return '—'
+  return String(t).replace('T', ' ').slice(0, 16)
+}
+
+function goRecommendation(item) {
+  if (item.type === 'exam') return router.push('/student/exams')
+  if (item.type === 'assignment') return router.push('/student/assignments')
+  if (item.type === 'review') return router.push('/student/review')
+  if (item.type === 'practice' && item.target_id) {
+    openPractice({ kp_id: item.target_id, kp_name: item.title.split(':').pop() })
   }
 }
 
@@ -381,6 +444,33 @@ async function submitPractice() {
   font-size: var(--fs-sm);
   color: var(--text-secondary);
 }
+
+/* 下一步建议 */
+.rec-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.rec {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+.rec:last-child { border-bottom: 0; }
+.rec__main { flex: 1; min-width: 0; }
+.rec__title {
+  font-size: var(--fs-base);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rec__meta { font-size: var(--fs-xs); color: var(--text-secondary); }
 
 @media (max-width: 720px) {
   .mastery-name { width: 110px; }

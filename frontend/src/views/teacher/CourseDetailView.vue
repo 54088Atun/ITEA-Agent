@@ -9,6 +9,9 @@
         <p class="page-sub">维护课程知识点体系与教材资料</p>
       </div>
       <div class="page-head__actions">
+        <el-button v-if="canEditInfo" @click="openAnnouncement">
+          <el-icon><Bell /></el-icon> 发布公告
+        </el-button>
         <el-button v-if="features.feature_course_share" @click="openShare">
           <el-icon><Share /></el-icon> 分享课程
         </el-button>
@@ -23,6 +26,33 @@
       <!-- 基本信息 -->
       <el-tab-pane label="基本信息" name="info">
         <div class="tab-body">
+          <div v-if="overview" class="overview-grid">
+            <div class="ov-card">
+              <span class="ov-card__label">资料</span>
+              <span class="ov-card__value">{{ overview.materials.total }}</span>
+              <span class="ov-card__hint">知识点 {{ overview.knowledge_points }} 个</span>
+            </div>
+            <div class="ov-card">
+              <span class="ov-card__label">班级 / 学生</span>
+              <span class="ov-card__value">{{ overview.classes.total }} / {{ overview.classes.students }}</span>
+              <span class="ov-card__hint">选课 {{ overview.classes.enrollments }} 人</span>
+            </div>
+            <div class="ov-card">
+              <span class="ov-card__label">作业</span>
+              <span class="ov-card__value">{{ overview.assignments.total }}</span>
+              <span class="ov-card__hint">
+                草稿 {{ overview.assignments.draft }} · 待批改 {{ overview.assignments.pending_grading }}
+              </span>
+            </div>
+            <div class="ov-card">
+              <span class="ov-card__label">考试</span>
+              <span class="ov-card__value">{{ overview.exams.total }}</span>
+              <span class="ov-card__hint">
+                草稿 {{ overview.exams.draft }} · 已发布 {{ overview.exams.published }}
+              </span>
+            </div>
+          </div>
+
           <div class="panel">
             <div class="panel__head">
               <span class="panel__title">课程信息</span>
@@ -192,6 +222,60 @@
         <div class="tab-body">
           <div class="panel">
             <div class="panel__head">
+              <span class="panel__title">待批改队列</span>
+              <span class="panel__hint">共 {{ gradingTotal }} 份待确认</span>
+            </div>
+            <el-table
+              :data="gradingQueue"
+              size="small"
+              v-loading="gradingLoading"
+              empty-text="暂无待批改提交"
+            >
+              <el-table-column prop="student_name" label="学生" width="110" />
+              <el-table-column label="作业" min-width="200">
+                <template #default="{ row }">
+                  <el-button link type="primary" @click="openQueueAssignment(row)">
+                    {{ row.assignment_title }}
+                  </el-button>
+                </template>
+              </el-table-column>
+              <el-table-column label="类型" width="90">
+                <template #default="{ row }">
+                  <el-tag size="small" effect="light" :type="row.assignment_kind === 'exam' ? 'danger' : ''">
+                    {{ row.assignment_kind === 'exam' ? '考试' : '作业' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="提交时间" width="160">
+                <template #default="{ row }">{{ formatTime(row.submitted_at) }}</template>
+              </el-table-column>
+              <el-table-column label="AI 建议" width="120">
+                <template #default="{ row }">
+                  <el-tag v-if="row.has_ai_suggestion" type="warning" size="small" effect="light">
+                    {{ row.ai_score }} 分
+                  </el-tag>
+                  <span v-else class="dim">未生成</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="90">
+                <template #default="{ row }">
+                  <el-button link type="primary" @click="openQueueAssignment(row)">去批改</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div v-if="gradingTotal > gradingPageSize" class="pager">
+              <el-pagination
+                v-model:current-page="gradingPage"
+                :page-size="gradingPageSize"
+                :total="gradingTotal"
+                layout="prev, pager, next"
+                @current-change="loadGradingQueue"
+              />
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel__head">
               <span class="panel__title">作业</span>
               <span class="panel__hint">共 {{ courseAssignments.length }} 项</span>
             </div>
@@ -252,6 +336,36 @@
         </div>
       </el-tab-pane>
     </el-tabs>
+
+    <!-- 发布课程公告 -->
+    <el-dialog v-model="announceVisible" title="发布课程公告" width="520px">
+      <el-form label-position="top">
+        <el-form-item label="发布范围">
+          <el-select
+            v-model="announceForm.classId"
+            clearable
+            placeholder="课程下全部班级"
+            style="width: 100%"
+          >
+            <el-option v-for="c in courseClasses" :key="c.id" :label="c.name" :value="c.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="公告内容" required>
+          <el-input
+            v-model="announceForm.content"
+            type="textarea"
+            :rows="5"
+            maxlength="2000"
+            show-word-limit
+            placeholder="例如：本周五前提交第三章作业，逾期不再受理"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="announceVisible = false">取消</el-button>
+        <el-button type="primary" :loading="announcing" @click="submitAnnouncement">发布</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 添加知识点 -->
     <el-dialog v-model="kpDialog" title="添加知识点" width="480px">
@@ -396,6 +510,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { courseApi } from '../../api/course'
 import { examApi } from '../../api/exams'
 import { teacherApi } from '../../api/teacher'
+import { classroomApi } from '../../api/classroom'
 import { features, loadFeatures } from '../../stores/features'
 import { useUserStore } from '../../stores/user'
 import SkeletonTable from '../../components/SkeletonTable.vue'
@@ -417,6 +532,14 @@ const exams = ref([])
 const userStore = useUserStore()
 const editingInfo = ref(false)
 const descColumns = window.matchMedia('(max-width: 767px)').matches ? 1 : 2
+
+// 课程概览与待批改队列
+const overview = ref(null)
+const gradingQueue = ref([])
+const gradingTotal = ref(0)
+const gradingPage = ref(1)
+const gradingPageSize = 10
+const gradingLoading = ref(false)
 
 const canEditInfo = computed(() => {
   if (!course.value) return false
@@ -449,6 +572,12 @@ const courseAssignments = computed(() =>
 const courseExams = computed(() =>
   exams.value.filter((item) => item.course_id === courseId),
 )
+
+// ---------- 课程公告 ----------
+const announceVisible = ref(false)
+const announcing = ref(false)
+const announceForm = reactive({ classId: null, content: '' })
+const courseClasses = ref([])
 
 // ---------- 资料预览 ----------
 const previewVisible = ref(false)
@@ -520,8 +649,67 @@ async function load() {
     knowledgePoints.value = Array.isArray(kps) ? kps : []
     materials.value = Array.isArray(mats) ? mats : []
     loadTasks()
+    loadOverview()
+    loadGradingQueue()
   } catch { /* 拦截器已提示 */ } finally {
     loading.value = false
+  }
+}
+
+/** 课程概览：素材/知识点/班级/作业/考试一次取齐，失败不影响主流程 */
+async function loadOverview() {
+  try {
+    overview.value = await teacherApi.courseOverview(courseId)
+  } catch {
+    overview.value = null
+  }
+}
+
+/** 待批改队列：跨作业聚合，支持翻页 */
+async function loadGradingQueue() {
+  gradingLoading.value = true
+  try {
+    const data = await teacherApi.gradingQueue(courseId, {
+      page: gradingPage.value,
+      page_size: gradingPageSize,
+    })
+    gradingQueue.value = data.items || []
+    gradingTotal.value = data.total || 0
+  } catch {
+    gradingQueue.value = []
+    gradingTotal.value = 0
+  } finally {
+    gradingLoading.value = false
+  }
+}
+
+function openQueueAssignment(row) {
+  router.push(`/teacher/assignments/${row.assignment_id}`)
+}
+
+async function openAnnouncement() {
+  announceForm.classId = null
+  announceForm.content = ''
+  announceVisible.value = true
+  if (courseClasses.value.length) return
+  try {
+    const rows = await classroomApi.list()
+    courseClasses.value = (Array.isArray(rows) ? rows : []).filter((c) => c.course_id === courseId)
+  } catch { /* 拦截器已提示 */ }
+}
+
+async function submitAnnouncement() {
+  const content = announceForm.content.trim()
+  if (!content) return ElMessage.warning('请输入公告内容')
+  announcing.value = true
+  try {
+    const res = await teacherApi.publishCourseAnnouncement(
+      courseId, content, announceForm.classId || null,
+    )
+    ElMessage.success(`公告已发布到 ${res.count} 个班级`)
+    announceVisible.value = false
+  } catch { /* 拦截器已提示 */ } finally {
+    announcing.value = false
   }
 }
 
@@ -852,6 +1040,31 @@ async function retryParse(row) {
   color: var(--text-secondary);
 }
 .dim { color: var(--text-placeholder); }
+
+/* 课程概览卡 */
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--sp-3);
+}
+.ov-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.ov-card__label { font-size: var(--fs-xs); color: var(--text-secondary); }
+.ov-card__value { font-size: var(--fs-xl); font-weight: 600; color: var(--text-primary); }
+.ov-card__hint { font-size: var(--fs-xs); color: var(--text-secondary); }
+
+.pager {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: var(--sp-3);
+}
 .share-form { margin-bottom: var(--sp-2); }
 .share-hint { margin-top: var(--sp-3); font-size: var(--fs-xs); color: var(--text-secondary); }
 .kp-panel { padding: var(--sp-4); }

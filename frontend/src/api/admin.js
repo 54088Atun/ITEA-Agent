@@ -29,6 +29,18 @@ export const adminApi = {
     // super / normal / observer，仅超管可调用
     return http.patch(`/admin/users/${id}/admin-level`, { admin_level: adminLevel })
   },
+  /** 用户概览:基础信息 + 关联课程 + 最近操作 + 风控命中 */
+  userOverview(id) {
+    return http.get(`/admin/users/${id}/overview`)
+  },
+  /** 批量启用/禁用;dry_run=true 只预演,返回 affected/skipped/failed */
+  batchUserStatus(userIds, status, dryRun = true) {
+    return http.patch('/admin/users/batch-status', {
+      user_ids: userIds,
+      status,
+      dry_run: dryRun,
+    })
+  },
 
   // ---------- 课程审核 ----------
   courses(params) {
@@ -38,6 +50,18 @@ export const adminApi = {
   auditCourse(id, auditStatus) {
     // pending / approved / rejected
     return http.patch(`/admin/courses/${id}/audit`, { audit_status: auditStatus })
+  },
+  /** 课程概览:课程、教师、素材、知识点、学生数与审核历史一次返回 */
+  courseOverview(id) {
+    return http.get(`/admin/courses/${id}/overview`)
+  },
+  /** 批量审核;dry_run=true 只预演,返回 affected/skipped/failed */
+  batchAuditCourses(courseIds, auditStatus, dryRun = true) {
+    return http.patch('/admin/courses/batch-audit', {
+      course_ids: courseIds,
+      audit_status: auditStatus,
+      dry_run: dryRun,
+    })
   },
 
   // ---------- 素材管理 ----------
@@ -56,6 +80,10 @@ export const adminApi = {
   },
   riskStats() {
     return http.get('/admin/risk-logs/stats')
+  },
+  /** 风险事件上下文:前后 30 分钟交互 + 管理员处置记录 */
+  riskContext(id) {
+    return http.get(`/admin/risk-logs/${id}/context`)
   },
 
   // ---------- 日志 ----------

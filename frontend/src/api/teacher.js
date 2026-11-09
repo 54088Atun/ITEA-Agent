@@ -14,6 +14,14 @@ export const teacherApi = {
   course(id) {
     return http.get(`/teacher/courses/${id}`)
   },
+  /** 课程概览:素材、知识点、班级、作业、考试一次返回 */
+  courseOverview(id) {
+    return http.get(`/teacher/courses/${id}/overview`)
+  },
+  /** 待批改队列:按课程聚合跨作业的待批改提交,params: {assignment_id?, class_id?, page?, page_size?} */
+  gradingQueue(id, params = {}) {
+    return http.get(`/teacher/courses/${id}/grading-queue`, { params })
+  },
   /** 复制自身课程结构(可覆盖名称/代码/学期) */
   duplicateCourse(id, data = {}) {
     return http.post(`/teacher/courses/${id}/duplicate`, data)
@@ -61,6 +69,13 @@ export const teacherApi = {
   /** 学情统计 → weakness / progress / distribution */
   stats(metric, params) {
     return http.get(`/teacher/stats/${metric}`, { params })
+  },
+  /** 按课程发布公告:落到该课程下的班级公告板,classId 为空则发给课程下全部班级 */
+  publishCourseAnnouncement(courseId, content, classId = null) {
+    return http.post(`/teacher/courses/${courseId}/announcement`, {
+      content,
+      class_id: classId,
+    })
   },
   /** 上传课程目录/大纲,由 Agent 生成知识点与大纲草稿(不直接入库) */
   createKpDraft(courseId, file) {
@@ -110,6 +125,21 @@ export const teacherApi = {
   publishAssignment(id, confirm = false) {
     return http.post(`/teacher/assignments/${id}/publish`, null, {
       params: { confirm },
+    })
+  },
+  /** 批量发布:dry_run=true 只预演,确认后统一发布 */
+  batchPublishAssignments(assignmentIds, dryRun = true) {
+    return http.post(
+      '/teacher/assignments/batch-publish',
+      { assignment_ids: assignmentIds, dry_run: dryRun },
+      { params: { confirm: !dryRun } },
+    )
+  },
+  /** 提醒未提交学生:dry_run=true 只预演 */
+  remindAssignment(id, { dryRun = true, message = null } = {}) {
+    return http.post(`/teacher/assignments/${id}/remind`, {
+      dry_run: dryRun,
+      message,
     })
   },
   closeAssignment(id, confirm = false) {

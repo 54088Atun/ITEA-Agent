@@ -72,6 +72,11 @@
         <el-table-column label="命中时间" width="180">
           <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
         </el-table-column>
+        <el-table-column label="操作" width="90" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="openContext(row)">上下文</el-button>
+          </template>
+        </el-table-column>
         <template #empty>
           <StateBlock
             state="empty"
@@ -93,6 +98,73 @@
         />
       </div>
     </div>
+
+    <!-- 风险事件上下文 -->
+    <el-drawer v-model="contextVisible" title="风险事件上下文" size="680px">
+      <div v-loading="contextLoading" class="ctx-body">
+        <template v-if="contextData">
+          <el-descriptions :column="2" border size="small">
+            <el-descriptions-item label="记录 ID">{{ contextData.risk_log.id }}</el-descriptions-item>
+            <el-descriptions-item label="风险类型">{{ contextData.risk_log.risk_type }}</el-descriptions-item>
+            <el-descriptions-item label="处置方式">{{ contextData.risk_log.action_taken }}</el-descriptions-item>
+            <el-descriptions-item label="命中时间">{{ formatTime(contextData.risk_log.created_at) }}</el-descriptions-item>
+            <el-descriptions-item label="用户" :span="2">
+              {{ contextData.user?.name || '未知用户' }}
+              <span v-if="contextData.user" class="dim">
+                #{{ contextData.user.id }} · {{ contextData.user.email }} · {{ contextData.user.status }}
+              </span>
+            </el-descriptions-item>
+            <el-descriptions-item label="请求内容" :span="2">
+              {{ contextData.risk_log.request_content }}
+            </el-descriptions-item>
+          </el-descriptions>
+
+          <section class="ctx-section">
+            <h4 class="ctx-title">命中前 30 分钟（{{ contextData.interaction_context.before.length }}）</h4>
+            <ul v-if="contextData.interaction_context.before.length" class="ctx-list">
+              <li v-for="log in contextData.interaction_context.before" :key="`b-${log.id}`" class="ctx-item">
+                <div class="ctx-item__head">
+                  <el-tag size="small" effect="light" :type="log.role === 'user' ? '' : 'success'">
+                    {{ log.role === 'user' ? '学生' : '助手' }}
+                  </el-tag>
+                  <span class="dim">{{ formatTime(log.created_at) }}</span>
+                </div>
+                <div class="ctx-item__content">{{ log.content }}</div>
+              </li>
+            </ul>
+            <div v-else class="empty-state">无前置对话</div>
+          </section>
+
+          <section class="ctx-section">
+            <h4 class="ctx-title">命中后 30 分钟（{{ contextData.interaction_context.after.length }}）</h4>
+            <ul v-if="contextData.interaction_context.after.length" class="ctx-list">
+              <li v-for="log in contextData.interaction_context.after" :key="`a-${log.id}`" class="ctx-item">
+                <div class="ctx-item__head">
+                  <el-tag size="small" effect="light" :type="log.role === 'user' ? '' : 'success'">
+                    {{ log.role === 'user' ? '学生' : '助手' }}
+                  </el-tag>
+                  <span class="dim">{{ formatTime(log.created_at) }}</span>
+                </div>
+                <div class="ctx-item__content">{{ log.content }}</div>
+              </li>
+            </ul>
+            <div v-else class="empty-state">无后续对话</div>
+          </section>
+
+          <section class="ctx-section">
+            <h4 class="ctx-title">管理员处置（{{ contextData.handling.length }}）</h4>
+            <el-table :data="contextData.handling" size="small" empty-text="暂无处置记录">
+              <el-table-column prop="action" label="动作" width="150" />
+              <el-table-column prop="admin_name" label="操作人" width="120" />
+              <el-table-column prop="detail" label="详情" min-width="220" show-overflow-tooltip />
+              <el-table-column label="时间" width="150">
+                <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+              </el-table-column>
+            </el-table>
+          </section>
+        </template>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -110,6 +182,11 @@ const page = ref(1)
 const size = ref(20)
 const stats = ref({})
 const filters = reactive({ risk_type: '', user_id: '' })
+
+// 风险事件上下文
+const contextVisible = ref(false)
+const contextLoading = ref(false)
+const contextData = ref(null)
 
 const riskTypes = computed(() => Object.keys(stats.value.by_type || {}))
 
@@ -153,10 +230,57 @@ function formatTime(t) {
   if (!t) return '—'
   return new Date(t).toLocaleString('zh-CN', { hour12: false })
 }
+
+/** 上下文：命中前后的交互片段 + 管理员处置记录 */
+async function openContext(row) {
+  contextData.value = null
+  contextVisible.value = true
+  contextLoading.value = true
+  try {
+    contextData.value = await adminApi.riskContext(row.id)
+  } catch { /* 拦截器已提示 */ } finally {
+    contextLoading.value = false
+  }
+}
 </script>
 
 <style scoped>
 .kpi__value--danger { color: var(--color-danger); }
 .tag-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: var(--sp-2); }
 .dim { color: var(--text-placeholder); font-size: var(--fs-xs); }
+
+/* 上下文抽屉 */
+.ctx-body { display: flex; flex-direction: column; gap: var(--sp-4); min-height: 120px; }
+.ctx-section { display: flex; flex-direction: column; gap: var(--sp-2); }
+.ctx-title {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.ctx-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.ctx-item {
+  padding: var(--sp-3);
+  background: var(--bg-subtle);
+  border-radius: var(--r-md);
+}
+.ctx-item__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-1);
+}
+.ctx-item__content {
+  font-size: var(--fs-sm);
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 </style>

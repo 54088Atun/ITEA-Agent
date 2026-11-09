@@ -32,6 +32,7 @@
               <span class="batch-bar__text">已选 {{ selectedIds.length }} 门</span>
               <el-button size="small" @click="clearSelection">取消选择</el-button>
               <el-button size="small" type="success" plain @click="batchAudit('approved')">批量通过</el-button>
+              <el-button size="small" type="danger" plain @click="batchAudit('rejected')">批量驳回</el-button>
             </div>
           </transition>
 
@@ -61,8 +62,9 @@
               <el-table-column label="创建时间" width="180">
                 <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
               </el-table-column>
-              <el-table-column v-if="userStore.canAdminWrite" label="操作" width="180" fixed="right">
+              <el-table-column v-if="userStore.canAdminWrite" label="操作" width="230" fixed="right">
                 <template #default="{ row }">
+                  <el-button link type="primary" @click="openCourseOverview(row)">概览</el-button>
                   <el-button
                     link type="success" :disabled="row.audit_status === 'approved'"
                     @click="audit(row, 'approved')"
@@ -159,6 +161,53 @@
         </div>
       </el-tab-pane>
     </el-tabs>
+
+    <!-- 课程概览 -->
+    <el-drawer
+      v-model="overviewVisible"
+      :title="`课程概览 · ${overviewData?.course?.name || ''}`"
+      size="640px"
+    >
+      <div v-loading="overviewLoading" class="ov-body">
+        <template v-if="overviewData">
+          <el-descriptions :column="2" border size="small">
+            <el-descriptions-item label="课程 ID">{{ overviewData.course.id }}</el-descriptions-item>
+            <el-descriptions-item label="课程代码">{{ overviewData.course.code }}</el-descriptions-item>
+            <el-descriptions-item label="学期">{{ overviewData.course.semester || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="审核状态">{{ auditLabel(overviewData.course.audit_status) }}</el-descriptions-item>
+            <el-descriptions-item label="授课教师">
+              {{ overviewData.teacher?.name || '—' }}
+            </el-descriptions-item>
+            <el-descriptions-item label="教师邮箱">{{ overviewData.teacher?.email || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="创建时间">{{ formatTime(overviewData.course.created_at) }}</el-descriptions-item>
+            <el-descriptions-item label="归档 / 删除">
+              {{ overviewData.course.archived ? '已归档' : '未归档' }} /
+              {{ overviewData.course.deleted ? '已删除' : '正常' }}
+            </el-descriptions-item>
+          </el-descriptions>
+
+          <div class="ov-stats">
+            <div class="ov-stat"><span>资料</span><b>{{ overviewData.materials.total }}</b></div>
+            <div class="ov-stat"><span>知识点</span><b>{{ overviewData.knowledge_points }}</b></div>
+            <div class="ov-stat"><span>班级</span><b>{{ overviewData.classes.total }}</b></div>
+            <div class="ov-stat"><span>班级学生</span><b>{{ overviewData.classes.students }}</b></div>
+            <div class="ov-stat"><span>选课人数</span><b>{{ overviewData.classes.enrollments }}</b></div>
+          </div>
+
+          <section class="ov-section">
+            <h4 class="ov-title">审核历史（{{ overviewData.audit_history.length }}）</h4>
+            <el-table :data="overviewData.audit_history" size="small" empty-text="暂无审核记录">
+              <el-table-column prop="action" label="动作" width="140" />
+              <el-table-column prop="admin_name" label="操作人" width="120" />
+              <el-table-column prop="detail" label="详情" min-width="220" show-overflow-tooltip />
+              <el-table-column label="时间" width="150">
+                <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+              </el-table-column>
+            </el-table>
+          </section>
+        </template>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -187,6 +236,11 @@ const filters = reactive({ keyword: '', semester: '', audit_status: '' })
 const tableRef = ref()
 const selectedIds = ref([])
 const pendingCount = computed(() => courses.value.filter((c) => c.audit_status === 'pending').length)
+
+// 课程概览
+const overviewVisible = ref(false)
+const overviewLoading = ref(false)
+const overviewData = ref(null)
 
 // ---------- 素材管理 ----------
 const materialLoading = ref(false)
@@ -258,28 +312,46 @@ async function audit(row, status) {
   } catch { /* 拦截器已提示 */ }
 }
 
-/** 批量通过：逐条调用现有审核接口 */
+/** 批量审核：先 dry_run 预演影响范围，确认后一次性执行并写汇总审计 */
 async function batchAudit(status) {
   const ids = [...selectedIds.value]
   if (!ids.length) return
+
+  let preview
   try {
-    await ElMessageBox.confirm(`确认将选中的 ${ids.length} 门课程标记为${auditLabel(status)}?`, '批量审核', { type: 'warning' })
+    preview = await adminApi.batchAuditCourses(ids, status, true)
   } catch { return }
 
-  let ok = 0
-  for (const id of ids) {
-    try {
-      await adminApi.auditCourse(id, status)
-      ok++
-    } catch { /* 单条失败不中断 */ }
+  const affected = preview.affected || []
+  const skipped = preview.skipped || []
+  const failed = preview.failed || []
+  if (!affected.length) {
+    ElMessage.warning(`没有可变更的课程（跳过 ${skipped.length} 门，失败 ${failed.length} 门）`)
+    clearSelection()
+    load()
+    return
   }
-  if (ok === ids.length) {
-    ElMessage.success(`已处理 ${ok} 门课程`)
-  } else {
-    ElMessage.warning(`成功 ${ok} 门，失败 ${ids.length - ok} 门`)
-  }
-  clearSelection()
-  load()
+
+  const lines = [`将把 ${affected.length} 门课程标记为${auditLabel(status)}`]
+  if (skipped.length) lines.push(`跳过 ${skipped.length} 门：${skipped[0].reason}`)
+  if (failed.length) lines.push(`失败 ${failed.length} 门：${failed[0].reason}`)
+  try {
+    await ElMessageBox.confirm(lines.join('；'), '批量审核预演', { type: 'warning' })
+  } catch { return }
+
+  try {
+    const result = await adminApi.batchAuditCourses(ids, status, false)
+    const ok = (result.affected || []).length
+    const skip = (result.skipped || []).length
+    const fail = (result.failed || []).length
+    if (skip || fail) {
+      ElMessage.warning(`已处理 ${ok} 门，跳过 ${skip} 门，失败 ${fail} 门`)
+    } else {
+      ElMessage.success(`已处理 ${ok} 门课程`)
+    }
+    clearSelection()
+    load()
+  } catch { /* 拦截器已提示 */ }
 }
 
 function auditLabel(s) {
@@ -335,6 +407,18 @@ function formatTime(t) {
   if (!t) return '—'
   return new Date(t).toLocaleString('zh-CN', { hour12: false })
 }
+
+/** 课程概览：课程/教师/规模/审核历史一次取齐 */
+async function openCourseOverview(row) {
+  overviewData.value = null
+  overviewVisible.value = true
+  overviewLoading.value = true
+  try {
+    overviewData.value = await adminApi.courseOverview(row.id)
+  } catch { /* 拦截器已提示 */ } finally {
+    overviewLoading.value = false
+  }
+}
 </script>
 
 <style scoped>
@@ -381,5 +465,31 @@ function formatTime(t) {
   justify-content: flex-end;
   padding: var(--sp-3) var(--sp-5);
   border-top: 1px solid var(--border);
+}
+
+/* 课程概览抽屉 */
+.ov-body { display: flex; flex-direction: column; gap: var(--sp-4); min-height: 120px; }
+.ov-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+  gap: var(--sp-2);
+}
+.ov-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-3);
+  background: var(--bg-subtle);
+  border-radius: var(--r-md);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+.ov-stat b { font-size: var(--fs-lg); color: var(--text-primary); }
+.ov-section { display: flex; flex-direction: column; gap: var(--sp-2); }
+.ov-title {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-primary);
 }
 </style>

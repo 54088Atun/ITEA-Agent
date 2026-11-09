@@ -20,10 +20,27 @@
       class="tip"
     />
 
+    <transition name="fade">
+      <div v-if="selectedIds.length" class="batch-bar">
+        <span class="batch-bar__text">已选 {{ selectedIds.length }} 项</span>
+        <el-button size="small" @click="clearSelection">取消选择</el-button>
+        <el-button size="small" type="success" plain :loading="batchPublishing" @click="batchPublish">
+          批量发布
+        </el-button>
+      </div>
+    </transition>
+
     <div class="panel">
       <SkeletonTable v-if="loading && !items.length" :rows="6" :cols="6" />
       <StateBlock v-else-if="error" state="error" @retry="load" />
-      <el-table v-else :data="items">
+      <el-table
+        v-else
+        ref="tableRef"
+        :data="items"
+        row-key="id"
+        @selection-change="onSelectionChange"
+      >
+        <el-table-column type="selection" width="46" :selectable="(row) => row.status === 'draft'" />
         <el-table-column prop="id" label="ID" width="70" />
         <el-table-column label="标题" min-width="200">
           <template #default="{ row }">
@@ -69,10 +86,17 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="240" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="openDetail(row)">查看详情</el-button>
             <el-button v-if="row.status === 'draft'" link type="success" @click="publish(row)">发布</el-button>
+            <el-button
+              v-if="row.status === 'published'"
+              link
+              type="primary"
+              :loading="remindId === row.id"
+              @click="remind(row)"
+            >催交</el-button>
             <el-button v-if="row.status !== 'closed'" link type="warning" @click="close(row)">关闭</el-button>
           </template>
         </el-table-column>
@@ -245,6 +269,11 @@ const confirmVisible = ref(false)
 const confirming = ref(false)
 const confirmForm = reactive({ submissionId: null, score: 60, feedback: '' })
 
+const tableRef = ref()
+const selectedIds = ref([])
+const batchPublishing = ref(false)
+const remindId = ref(null)
+
 onMounted(load)
 
 async function load() {
@@ -333,6 +362,82 @@ async function publish(row) {
   } catch { /* 拦截器已提示 */ }
 }
 
+function onSelectionChange(rows) {
+  selectedIds.value = rows.map((row) => row.id)
+}
+
+function clearSelection() {
+  tableRef.value?.clearSelection()
+  selectedIds.value = []
+}
+
+/** 批量发布：先预演影响范围，确认后统一发布 */
+async function batchPublish() {
+  const ids = [...selectedIds.value]
+  if (!ids.length) return
+
+  let preview
+  try {
+    preview = await teacherApi.batchPublishAssignments(ids, true)
+  } catch { return }
+
+  const affected = preview.affected || []
+  const skipped = preview.skipped || []
+  if (!affected.length) {
+    ElMessage.warning(`没有可发布的作业（跳过 ${skipped.length} 项）`)
+    clearSelection()
+    load()
+    return
+  }
+  const lines = [`将发布 ${affected.length} 项作业`]
+  if (skipped.length) lines.push(`跳过 ${skipped.length} 项：${skipped[0].reason}`)
+  try {
+    await ElMessageBox.confirm(`${lines.join('；')}，发布后学生立即可见。`, '批量发布预演', { type: 'warning' })
+  } catch { return }
+
+  batchPublishing.value = true
+  try {
+    const result = await teacherApi.batchPublishAssignments(ids, false)
+    ElMessage.success(`已发布 ${(result.affected || []).length} 项`)
+    clearSelection()
+    load()
+  } catch { /* 拦截器已提示 */ } finally {
+    batchPublishing.value = false
+  }
+}
+
+/** 催交：预演未提交人数，允许修改提醒文案后发送 */
+async function remind(row) {
+  remindId.value = row.id
+  try {
+    const preview = await teacherApi.remindAssignment(row.id, { dryRun: true })
+    const targets = preview.affected || []
+    if (!targets.length) {
+      ElMessage.info('没有需要提醒的学生（均已提交或未加入该课程/班级）')
+      return
+    }
+    let message
+    try {
+      const { value } = await ElMessageBox.prompt(
+        `将为 ${targets.length} 名未提交学生发送站内提醒，可修改提醒内容：`,
+        '催交提醒',
+        {
+          inputValue: `作业“${row.title}”尚未提交，请尽快完成。`,
+          confirmButtonText: '发送提醒',
+        },
+      )
+      message = value
+    } catch { return }
+
+    const result = await teacherApi.remindAssignment(row.id, { dryRun: false, message })
+    const ok = (result.affected || []).length
+    const skip = (result.skipped || []).length
+    ElMessage.success(`已提醒 ${ok} 人${skip ? `，${skip} 人已关闭作业通知` : ''}`)
+  } catch { /* 拦截器已提示 */ } finally {
+    remindId.value = null
+  }
+}
+
 async function close(row) {
   try {
     await ElMessageBox.confirm('关闭后学生将无法再提交，确定关闭？', '关闭作业', { type: 'warning' })
@@ -414,6 +519,22 @@ async function submitConfirm() {
 
 <style scoped>
 .tip { margin-bottom: var(--sp-3); }
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  margin-bottom: var(--sp-3);
+  background: var(--color-primary-wash);
+  border: 1px solid var(--brand-100);
+  border-radius: var(--r-md);
+}
+.batch-bar__text {
+  font-size: var(--fs-sm);
+  color: var(--color-primary);
+  font-weight: 600;
+  margin-right: var(--sp-2);
+}
 .cell-title { display: flex; align-items: center; gap: var(--sp-2); }
 .count { color: var(--text-primary); }
 .pending { color: var(--color-warning, #b26a00); font-size: var(--fs-xs); }

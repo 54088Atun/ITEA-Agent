@@ -27,6 +27,7 @@
         <template v-if="sessionId">
           <button type="button" @click="summarizeCurrent(false)">摘要</button>
           <button type="button" @click="exportCurrent">导出</button>
+          <button v-if="canSetSecurity" type="button" @click="openSecurityLevel">分级</button>
         </template>
         <button type="button" @click="openMemories">记忆</button>
       </div>
@@ -383,6 +384,21 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="securityVisible" title="会话信息分级" width="480px">
+      <p class="chat-security__hint">
+        人工设置会覆盖系统自动判定；上调或下调均对当前会话生效。
+      </p>
+      <el-radio-group v-model="securityLevel" class="chat-security__group">
+        <el-radio v-for="opt in SECURITY_OPTIONS" :key="opt.value" :value="opt.value">
+          {{ opt.label }}<span class="chat-security__desc">{{ opt.desc }}</span>
+        </el-radio>
+      </el-radio-group>
+      <template #footer>
+        <el-button @click="securityVisible = false">取消</el-button>
+        <el-button type="primary" :loading="securitySaving" @click="saveSecurityLevel">保存</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="timelineVisible" title="执行时间线" width="min(560px, 92vw)">
       <div v-loading="timelineLoading" class="run-timeline">
         <p v-if="timelineRun" class="run-timeline__meta">
@@ -499,6 +515,7 @@ import { chatApi } from '../api/chat'
 import { agentApi } from '../api/agent'
 import { adminApi } from '../api/admin'
 import { uploadApi } from '../api/uploads'
+import { useUserStore } from '../stores/user'
 import { features, loadFeatures } from '../stores/features'
 import DebouncedInput from './DebouncedInput.vue'
 
@@ -568,6 +585,19 @@ const recordingLimit = computed(() => {
 const summaryVisible = ref(false)
 const summaryText = ref('')
 const summarizing = ref(false)
+
+// 会话信息分级:教师/管理员可人工覆盖自动判定
+const userStore = useUserStore()
+const canSetSecurity = computed(() => ['teacher', 'admin'].includes(userStore.role))
+const SECURITY_OPTIONS = [
+  { value: 'full', label: '公开', desc: '公开或低敏内容，直接输出' },
+  { value: 'auto', label: '内部', desc: '内部内容，规则校验后输出' },
+  { value: 'manual', label: '敏感', desc: '敏感内容，需授权角色查看' },
+  { value: 'confidential', label: '机密', desc: '机密内容，仅管理员可查看' },
+]
+const securityVisible = ref(false)
+const securityLevel = ref('auto')
+const securitySaving = ref(false)
 let recorder = null
 let audioChunks = []
 let audioTimer = null
@@ -1518,6 +1548,27 @@ async function exportCurrent() {
   } catch { /* 拦截器已提示 */ }
 }
 
+function openSecurityLevel() {
+  if (!sessionId.value) return ElMessage.warning('请先在左侧选择一条历史对话')
+  const item = conversations.value.find((c) => c.session_id === sessionId.value)
+  securityLevel.value = item?.security_level || 'auto'
+  securityVisible.value = true
+}
+
+async function saveSecurityLevel() {
+  if (!sessionId.value) return
+  securitySaving.value = true
+  try {
+    const data = await chatApi.setSecurityLevel(sessionId.value, securityLevel.value)
+    const item = conversations.value.find((c) => c.session_id === sessionId.value)
+    if (item) item.security_level = data.security_level
+    ElMessage.success(`已设为「${data.level_label || securityLevel.value}」`)
+    securityVisible.value = false
+  } catch { /* 拦截器已提示 */ } finally {
+    securitySaving.value = false
+  }
+}
+
 async function openConversation(item) {
   historyDrawerVisible.value = false
   if (streaming.value) return
@@ -2379,6 +2430,22 @@ async function copy(text) {
   line-height: var(--lh-base);
   color: var(--text-primary);
   white-space: pre-wrap;
+}
+.chat-security__hint {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+.chat-security__group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+.chat-security__desc {
+  margin-left: var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
 }
 .chat-side__empty {
   padding: var(--sp-4) 0;
