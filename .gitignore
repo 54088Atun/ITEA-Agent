@@ -22,6 +22,7 @@ frontend/node_modules/
 
 # ===== 运行时产物 =====
 backend/static/
+backend/data/
 backend/uploads/
 backend/knowledge_base/index/
 *.log

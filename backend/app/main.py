@@ -59,8 +59,10 @@ configure_cors(app)
 # 请求级 request_id:日志/审计/上传拒绝/通知/轨迹共用同一标识
 app.add_middleware(RequestContextMiddleware)
 
-# 需要登录才能访问的静态资源前缀(上传文件/生成文件)
-PROTECTED_STATIC_PREFIXES = ("/uploads/", "/generated/", "/static/generated/")
+# 需要登录才能访问的静态资源前缀(上传文件/生成文件/检索索引)
+PROTECTED_STATIC_PREFIXES = (
+    "/uploads/", "/generated/", "/static/generated/", "/static/faiss_indexes/",
+)
 
 
 @app.middleware("http")

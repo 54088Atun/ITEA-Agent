@@ -201,3 +201,58 @@ def test_preview_material_rejects_cross_course_material(preview_env):
         preview_material(10, 51, preview_env.get(User, 1), preview_env)
 
     assert exc.value.status_code == 404
+
+
+# ---------- 索引重建与词法检索(生产无向量依赖时的兜底) ----------
+
+def test_lexical_search_without_vector_deps(tmp_path, monkeypatch):
+    monkeypatch.setattr(rag_module.settings, "RAG_VECTOR_ENABLED", False)
+    manager = rag_module.RAGManager()
+    manager._index_dir = str(tmp_path)
+
+    documents = [
+        {"content": "二叉树的中序遍历顺序是左子树、根节点、右子树。",
+         "source": "第3章_二叉树.pdf", "scope": "courseware", "material_id": 7},
+        {"content": "进程调度算法包括先来先服务、短作业优先与时间片轮转。",
+         "source": "第4章_操作系统.pdf", "scope": "courseware", "material_id": 8},
+    ]
+
+    assert manager.build_index(10, documents) == 2
+    assert manager.index_ready(10)
+
+    hits = manager.search("二叉树的中序遍历", 10, top_k=1)
+    assert hits and hits[0]["material_id"] == 7
+    assert hits[0]["source"] == "第3章_二叉树.pdf"
+
+    # 范围过滤与无关问题都不伪造来源
+    assert manager.search("进程调度", 10, scope="syllabus") == []
+    assert manager.search("量子纠缠实验", 10) == []
+
+
+def test_rebuild_course_index_after_material_parse(scope_env, tmp_path, monkeypatch):
+    from app.services.material_parse_jobs import enqueue, run_parse_job
+
+    manager = rag_module.RAGManager()
+    manager._index_dir = str(tmp_path)
+    monkeypatch.setattr(rag_module, "_manager", manager)
+
+    path = tmp_path / "第1章_基础.txt"
+    path.write_text("等价类划分与边界值分析用于设计测试用例", encoding="utf-8")
+    material = CourseMaterial(
+        course_id=10, type="courseware", title="第1章_基础",
+        file_path=str(path), chunk_count=0, moderation_status="pending",
+    )
+    scope_env.add(material)
+    scope_env.commit()
+    scope_env.refresh(material)
+
+    job = enqueue(scope_env, material)
+    done = run_parse_job(scope_env, job.id)
+    scope_env.refresh(material)
+
+    assert done.status == "done"
+    assert material.chunk_count == 1
+    assert manager.index_ready(10)
+    hits = manager.search("边界值分析", 10, top_k=1)
+    assert hits and hits[0]["material_id"] == material.id
+    assert hits[0]["source"] == "第1章_基础"

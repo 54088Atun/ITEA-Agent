@@ -880,11 +880,12 @@ def delete_material(
     admin: User = Depends(require_admin_write),
     db: Session = Depends(get_db),
 ):
-    """删除素材(同步清理磁盘文件;向量库由入库脚本重建)"""
+    """删除素材(同步清理磁盘文件,并重建课程检索索引)"""
     import os
     material = db.query(CourseMaterial).filter(CourseMaterial.id == material_id).first()
     if not material:
         raise HTTPException(status_code=404, detail="素材不存在")
+    course_id = material.course_id
 
     try:
         if material.file_path and os.path.exists(material.file_path):
@@ -892,10 +893,16 @@ def delete_material(
     except Exception as e:
         logger.warning("素材文件删除失败: %s", e)
 
-    detail = json.dumps({"title": material.title, "course_id": material.course_id},
+    detail = json.dumps({"title": material.title, "course_id": course_id},
                         ensure_ascii=False)
     db.delete(material)
     db.commit()
+    try:
+        from app.agent.tools.rag_search import rebuild_course_index
+
+        rebuild_course_index(db, course_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("课程索引重建失败 course=%s: %s", course_id, e)
     _audit(db, admin, request, "delete", "material", material_id, detail)
     return {"id": material_id, "deleted": True}
 

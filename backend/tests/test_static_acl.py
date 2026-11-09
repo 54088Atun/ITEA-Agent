@@ -117,3 +117,10 @@ def test_unknown_upload_dir_stays_login_readable(db):
     assert is_static_allowed(
         "/uploads/legacy/notes.txt", _user(db, 4), db,
     ) is True
+
+
+def test_retrieval_index_is_never_served(db):
+    """课程检索索引只供后端读取,任何角色都不能通过静态路由下载"""
+    path = "/static/faiss_indexes/course_10.json"
+    for uid in (1, 2, 3, 4, 5):
+        assert is_static_allowed(path, _user(db, uid), db) is False

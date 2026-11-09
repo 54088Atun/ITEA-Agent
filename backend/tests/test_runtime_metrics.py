@@ -151,6 +151,7 @@ def test_parse_job_records_unhandled_error_and_reraises(
 def test_index_records_only_real_builds_once(tmp_path, monkeypatch):
     rag_module = importlib.import_module("app.agent.tools.rag_search")
     error = RuntimeError("embedding unavailable")
+    monkeypatch.setattr(rag_module.settings, "RAG_VECTOR_ENABLED", True)
 
     class FakeEmbedding:
         fail = False
@@ -181,10 +182,9 @@ def test_index_records_only_real_builds_once(tmp_path, monkeypatch):
     manager.build_index(10, [])
     manager.build_index(10, documents)
     embedding.fail = True
-    with pytest.raises(RuntimeError) as exc_info:
-        manager.build_index(11, documents)
+    # 向量构建失败不阻断:索引仍以词法模式可用,仅记录一次失败指标
+    assert manager.build_index(11, documents) == 1
 
-    assert exc_info.value is error
     metric = runtime_metrics_snapshot()["index"]
     assert metric["total"] == 2
     assert metric["success"] == 1

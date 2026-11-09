@@ -66,6 +66,11 @@ class Settings(BaseSettings):
 
     # 向量模型
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
+    # 默认使用 BM25 词法检索(生产裁剪 torch 后仍可基于课程资料作答);
+    # 显式开启且 faiss/sentence-transformers 可用时才额外构建向量索引。
+    RAG_VECTOR_ENABLED: bool = False
+    # 索引落盘目录:必须在静态挂载目录之外,避免被 /static 路由直接下载
+    RAG_INDEX_DIR: str = "data/faiss_indexes"
 
     # 应用
     ENVIRONMENT: str = "development"  # development/test/production

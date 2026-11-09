@@ -20,6 +20,8 @@ from app.services.course_access import assert_course_visible
 
 UPLOAD_PREFIX = "/uploads/"
 GENERATED_PREFIXES = ("/static/generated/", "/generated/")
+# 检索索引只供后端读取,任何用户都不通过静态路由下载
+INDEX_PREFIX = "/static/faiss_indexes/"
 PRIVATE_UPLOAD_DIRS = ("vision", "audio")
 
 
@@ -69,6 +71,9 @@ def _generated_allowed(parts: list[str], user: User) -> bool:
 
 def is_static_allowed(path: str, user: User, db: Session) -> bool:
     """判断当前登录用户能否读取该静态文件路径"""
+    if path.startswith(INDEX_PREFIX):
+        return False
+
     if path.startswith(UPLOAD_PREFIX):
         parts = _segments(path[len(UPLOAD_PREFIX):])
         return _safe_segments(parts) and _upload_allowed(parts, user, db)

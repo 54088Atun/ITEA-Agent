@@ -90,6 +90,17 @@ def _finish(job: MaterialParseJob, status: str, error: Optional[str]) -> None:
     job.finished_at = datetime.utcnow()
 
 
+def _refresh_course_index(db: Session, course_id: int) -> None:
+    """按最新解析结果重建课程检索索引;失败只记日志,不影响解析结论"""
+    try:
+        from app.agent.tools.rag_search import rebuild_course_index
+
+        rebuild_course_index(db, course_id)
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        logger.warning("课程索引重建失败 course=%s: %s", course_id, safe_exception(exc))
+
+
 def _run_parse_job(db: Session, job_id: int) -> Optional[MaterialParseJob]:
     """执行解析与审核;使用调用方会话,便于测试断言"""
     job = db.query(MaterialParseJob).filter(MaterialParseJob.id == job_id).first()
@@ -157,6 +168,8 @@ def _run_parse_job(db: Session, job_id: int) -> Optional[MaterialParseJob]:
         )
         db.commit()
         logger.info("素材审核拒绝 material=%s hits=%s", material.id, verdict["hits"])
+        # 素材可能此前已入库,驳回后需从索引中移除
+        _refresh_course_index(db, material.course_id)
         return job
 
     job.result_text = text[:MAX_RESULT_CHARS]
@@ -167,6 +180,8 @@ def _run_parse_job(db: Session, job_id: int) -> Optional[MaterialParseJob]:
         "素材解析完成 material=%s chars=%s attempts=%s",
         material.id, len(text), job.attempts,
     )
+    # 解析/审核通过后立即刷新课程索引,让 Agent 能基于新素材作答
+    _refresh_course_index(db, material.course_id)
     return job
 
 
