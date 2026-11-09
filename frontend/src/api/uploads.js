@@ -20,6 +20,10 @@ export const uploadApi = {
       timeout: 120000,
     })
   },
+  /** 实时语音识别票据(60 秒有效) */
+  audioStreamTicket() {
+    return http.post('/uploads/audio/stream-ticket')
+  },
   /** 聊天文档解析:返回 {filename, text, chars, truncated} */
   document(file) {
     const form = new FormData()

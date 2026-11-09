@@ -292,11 +292,11 @@
           </span>
         </div>
         <div class="chat__composer-actions">
-          <span v-if="recording" class="chat__recording">录音中 {{ recordingSeconds }}s / {{ recordingLimit }}s</span>
+          <span v-if="recording" class="chat__recording">正在识别 {{ recordingSeconds }}s / {{ recordingLimit }}s</span>
           <el-button
-            text :loading="uploadingAudio"
-            :title="recording ? '结束录音并转写' : (features.asr_ready ? '语音输入' : '语音识别未配置，请使用文字输入')"
-            :aria-label="recording ? '结束录音并转写' : '语音输入'"
+            text :loading="uploadingAudio || voiceConnecting"
+            :title="recording ? '结束实时语音识别' : (features.asr_ready ? '实时语音输入' : '语音识别未配置，请使用文字输入')"
+            :aria-label="recording ? '结束实时语音识别' : '实时语音输入'"
             :disabled="streaming || interviewExpired || !features.asr_ready" @click="toggleRecording"
           >
             <el-icon :class="{ 'is-recording': recording }"><Microphone /></el-icon>
@@ -549,6 +549,7 @@ const uploadingImage = ref(false)
 const recording = ref(false)
 const recordingSeconds = ref(0)
 const uploadingAudio = ref(false)
+const voiceConnecting = ref(false)
 // 本轮是否使用过语音转写(仅用于气泡来源标签,转写文本已并入输入框)
 const voiceUsed = ref(false)
 const speakingIndex = ref(-1)
@@ -570,6 +571,18 @@ const summarizing = ref(false)
 let recorder = null
 let audioChunks = []
 let audioTimer = null
+let realtimeWs = null
+let audioContext = null
+let mediaStream = null
+let processor = null
+let sourceNode = null
+let gainNode = null
+let voiceBaseText = ''
+let voiceFinalText = ''
+let voiceCurrentText = ''
+let voiceReady = false
+let voiceFinished = false
+let voiceStopTimer = null
 let controller = null
 // 取消当前消息的续答轮询(停止生成/切换会话/卸载时调用)
 let cancelRecovery = null
@@ -1112,10 +1125,10 @@ async function addImageFiles(files) {
   }
 }
 
-// ---------- 语音输入 ----------
+// ---------- 语音输入(百炼实时流式,失败回退录音上传) ----------
 
 async function toggleRecording() {
-  if (uploadingAudio.value || streaming.value || interviewExpired.value) return
+  if (uploadingAudio.value || voiceConnecting.value || streaming.value || interviewExpired.value) return
   if (!features.asr_ready) {
     ElMessage.warning('语音识别未配置，请使用文字输入')
     return
@@ -1124,46 +1137,262 @@ async function toggleRecording() {
     stopRecording()
     return
   }
-  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+  if (!navigator.mediaDevices?.getUserMedia) {
     ElMessage.warning('当前浏览器不支持录音，请改用文字输入')
     return
   }
+  voiceConnecting.value = true
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    const mr = new MediaRecorder(stream)
-    audioChunks = []
-    mr.ondataavailable = (event) => {
-      if (event.data?.size) audioChunks.push(event.data)
-    }
-    mr.onstop = async () => {
-      stream.getTracks().forEach((track) => track.stop())
-      clearInterval(audioTimer)
-      audioTimer = null
-      recording.value = false
-      recordingSeconds.value = 0
-      const type = mr.mimeType || 'audio/webm'
-      const blob = new Blob(audioChunks, { type })
-      if (!blob.size) return
-      const ext = type.includes('ogg') ? 'ogg'
-        : (type.includes('mp4') || type.includes('m4a') ? 'm4a' : 'webm')
-      await uploadVoice(new File([blob], `voice.${ext}`, { type }))
-    }
-    mr.start()
-    recorder = mr
-    recording.value = true
-    recordingSeconds.value = 0
-    audioTimer = setInterval(() => {
-      recordingSeconds.value += 1
-      // 单次录音上限与后端 asr_max_seconds 对齐,避免前端先截断/后端后拒绝
-      if (recordingSeconds.value >= recordingLimit.value) stopRecording()
-    }, 1000)
+    await startRealtimeRecording()
   } catch (error) {
-    ElMessage.warning(microphoneErrorMessage(error))
+    releaseRealtime()
+    if (typeof MediaRecorder === 'undefined') {
+      ElMessage.warning(microphoneErrorMessage(error) || '当前浏览器不支持实时语音识别')
+      return
+    }
+    ElMessage.warning('实时语音不可用，已切换为录音后转写')
+    await startLegacyRecording()
+  } finally {
+    voiceConnecting.value = false
   }
 }
 
+async function startRealtimeRecording() {
+  const ticket = await uploadApi.audioStreamTicket()
+  const scheme = location.protocol === 'https:' ? 'wss' : 'ws'
+  const ws = new WebSocket(
+    `${scheme}://${location.host}/api/uploads/audio/stream?token=${encodeURIComponent(ticket.ticket)}`,
+  )
+  ws.binaryType = 'arraybuffer'
+  ws.onmessage = handleRealtimeMessage
+  ws.onclose = () => {
+    if (!voiceFinished && voiceReady) finishRealtimeVoice(true)
+  }
+  realtimeWs = ws
+  voiceBaseText = input.value || ''
+  voiceFinalText = ''
+  voiceCurrentText = ''
+  voiceReady = false
+  voiceFinished = false
+
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('实时语音连接超时')), 10000)
+    ws.onopen = () => {
+      clearTimeout(timer)
+      resolve()
+    }
+    ws.onerror = () => {
+      clearTimeout(timer)
+      reject(new Error('实时语音连接失败'))
+    }
+  })
+
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+  })
+  mediaStream = stream
+  const AudioCtx = window.AudioContext || window.webkitAudioContext
+  const ctx = new AudioCtx()
+  audioContext = ctx
+  if (ctx.state === 'suspended') await ctx.resume()
+  const source = ctx.createMediaStreamSource(stream)
+  sourceNode = source
+  const proc = ctx.createScriptProcessor(4096, 1, 1)
+  processor = proc
+  const gain = ctx.createGain()
+  gain.gain.value = 0
+  gainNode = gain
+  proc.onaudioprocess = (event) => {
+    if (!voiceReady || !realtimeWs || realtimeWs.readyState !== WebSocket.OPEN) return
+    const pcm = encodePcm16(downsample(
+      event.inputBuffer.getChannelData(0), ctx.sampleRate, 16000,
+    ))
+    try { realtimeWs.send(pcm) } catch { /* 连接已断开时忽略 */ }
+  }
+  source.connect(proc)
+  proc.connect(gain)
+  gain.connect(ctx.destination)
+
+  recording.value = true
+  recordingSeconds.value = 0
+  startRecordingTimer()
+}
+
+function handleRealtimeMessage(event) {
+  let data
+  try { data = JSON.parse(event.data) } catch { return }
+  if (data.type === 'started') {
+    voiceReady = true
+    return
+  }
+  if (data.type === 'partial') {
+    voiceCurrentText = data.text || ''
+    renderVoiceText()
+    return
+  }
+  if (data.type === 'sentence') {
+    voiceFinalText = appendVoiceText(voiceFinalText, data.text || '')
+    voiceCurrentText = ''
+    renderVoiceText()
+    return
+  }
+  if (data.type === 'finished') {
+    finishRealtimeVoice()
+    return
+  }
+  if (data.type === 'error') {
+    ElMessage.warning(data.message || '实时语音识别失败')
+    finishRealtimeVoice(true)
+  }
+}
+
+function appendVoiceText(base, addition) {
+  const text = (addition || '').trim()
+  if (!text) return base || ''
+  if (!base) return text
+  return /[\u4e00-\u9fff，。！？；：、]$/.test(base) ? `${base}${text}` : `${base} ${text}`
+}
+
+function joinVoiceBase(base, text) {
+  if (!base) return text
+  if (!text) return base
+  return /[A-Za-z0-9]$/.test(base) ? `${base} ${text}` : `${base}${text}`
+}
+
+function renderVoiceText() {
+  input.value = joinVoiceBase(voiceBaseText, `${voiceFinalText}${voiceCurrentText}`)
+}
+
+function finishRealtimeVoice(error = false) {
+  if (voiceFinished) return
+  voiceFinished = true
+  const text = (voiceFinalText || voiceCurrentText || '').trim()
+  if (text) {
+    input.value = joinVoiceBase(voiceBaseText, text)
+    voiceUsed.value = true
+    if (!error) ElMessage.success('语音已转文字，请确认后发送')
+  } else if (!error) {
+    ElMessage.info('未识别到语音内容')
+  }
+  releaseRealtime()
+}
+
 function stopRecording() {
+  clearRecordingTimer()
+  if (realtimeWs) {
+    recording.value = false
+    try { realtimeWs.send(JSON.stringify({ type: 'stop' })) } catch { /* ignore */ }
+    stopRealtimeCapture()
+    if (voiceStopTimer) clearTimeout(voiceStopTimer)
+    voiceStopTimer = setTimeout(() => finishRealtimeVoice(), 6000)
+    return
+  }
   if (recorder && recorder.state === 'recording') recorder.stop()
+}
+
+async function startLegacyRecording() {
+  if (typeof MediaRecorder === 'undefined') {
+    ElMessage.warning('当前浏览器不支持录音，请改用文字输入')
+    return
+  }
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+  const mr = new MediaRecorder(stream)
+  audioChunks = []
+  mr.ondataavailable = (event) => {
+    if (event.data?.size) audioChunks.push(event.data)
+  }
+  mr.onstop = async () => {
+    stream.getTracks().forEach((track) => track.stop())
+    clearRecordingTimer()
+    recording.value = false
+    recordingSeconds.value = 0
+    const type = mr.mimeType || 'audio/webm'
+    const blob = new Blob(audioChunks, { type })
+    if (!blob.size) return
+    const ext = type.includes('ogg') ? 'ogg'
+      : (type.includes('mp4') || type.includes('m4a') ? 'm4a' : 'webm')
+    await uploadVoice(new File([blob], `voice.${ext}`, { type }))
+  }
+  mr.start()
+  recorder = mr
+  recording.value = true
+  recordingSeconds.value = 0
+  startRecordingTimer()
+}
+
+function startRecordingTimer() {
+  clearRecordingTimer()
+  audioTimer = setInterval(() => {
+    recordingSeconds.value += 1
+    // 单次录音上限与后端 asr_max_seconds 对齐,避免前端先截断/后端后拒绝
+    if (recordingSeconds.value >= recordingLimit.value) stopRecording()
+  }, 1000)
+}
+
+function clearRecordingTimer() {
+  clearInterval(audioTimer)
+  audioTimer = null
+}
+
+function stopRealtimeCapture() {
+  try { processor?.disconnect() } catch { /* ignore */ }
+  try { sourceNode?.disconnect() } catch { /* ignore */ }
+  try { gainNode?.disconnect() } catch { /* ignore */ }
+  mediaStream?.getTracks?.().forEach((track) => track.stop())
+  audioContext?.close?.().catch?.(() => {})
+  processor = null
+  sourceNode = null
+  gainNode = null
+  mediaStream = null
+  audioContext = null
+}
+
+function releaseRealtime() {
+  clearRecordingTimer()
+  if (voiceStopTimer) {
+    clearTimeout(voiceStopTimer)
+    voiceStopTimer = null
+  }
+  stopRealtimeCapture()
+  if (realtimeWs) {
+    try {
+      realtimeWs.onmessage = null
+      realtimeWs.onclose = null
+      if (realtimeWs.readyState <= WebSocket.OPEN) realtimeWs.close()
+    } catch { /* ignore */ }
+    realtimeWs = null
+  }
+  recording.value = false
+  voiceReady = false
+}
+
+function downsample(buffer, from, to) {
+  if (from === to) return buffer
+  const ratio = from / to
+  const length = Math.floor(buffer.length / ratio)
+  const result = new Float32Array(length)
+  let offset = 0
+  for (let i = 0; i < length; i += 1) {
+    const next = Math.floor((i + 1) * ratio)
+    let sum = 0
+    let count = 0
+    for (let j = offset; j < next && j < buffer.length; j += 1) {
+      sum += buffer[j]
+      count += 1
+    }
+    result[i] = count ? sum / count : 0
+    offset = next
+  }
+  return result
+}
+
+function encodePcm16(samples) {
+  const out = new Int16Array(samples.length)
+  for (let i = 0; i < samples.length; i += 1) {
+    const sample = Math.max(-1, Math.min(1, samples[i]))
+    out[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff
+  }
+  return out.buffer
 }
 
 async function uploadVoice(file) {
@@ -1182,8 +1411,7 @@ async function uploadVoice(file) {
 }
 
 function releaseRecorder() {
-  clearInterval(audioTimer)
-  audioTimer = null
+  clearRecordingTimer()
   if (recorder && recorder.state === 'recording') {
     recorder.stream?.getTracks?.().forEach((track) => track.stop())
     recorder.stop()
@@ -1910,6 +2138,7 @@ onBeforeUnmount(() => {
   controller = null
   clearInterval(interviewTimer)
   releaseRecorder()
+  releaseRealtime()
   listObserver?.disconnect()
 })
 

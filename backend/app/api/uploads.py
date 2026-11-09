@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, WebSocket
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
@@ -24,6 +24,9 @@ from app.services.material_parser import (
 from app.services.quotas import (
     assert_audio_upload_allowed, assert_image_upload_allowed,
     record_audio_upload, record_image_upload,
+)
+from app.services.realtime_asr import (
+    issue_stream_ticket, relay_audio_stream, user_from_stream_ticket,
 )
 from app.services.vision import (
     MAX_IMAGE_BYTES, describe_image, describe_image_semantics, vision_enabled,
@@ -242,6 +245,39 @@ def delete_my_image(filename: str, user: User = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="图片不存在")
     path.unlink()
     return {"deleted": name}
+
+
+@router.post("/audio/stream-ticket")
+def audio_stream_ticket(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """签发实时语音识别票据:浏览器 WebSocket 用查询参数携带"""
+    if not asr_enabled():
+        raise HTTPException(status_code=400, detail="语音识别未配置")
+    assert_audio_upload_allowed(db, user, 0, 0)
+    return {
+        "ticket": issue_stream_ticket(user),
+        "expires_in": 60,
+        "model": settings.ASR_REALTIME_MODEL,
+    }
+
+
+@router.websocket("/audio/stream")
+async def audio_stream(websocket: WebSocket, token: str = Query("")):
+    """实时语音识别:浏览器 PCM 分片 → 百炼实时 ASR → 文本回传"""
+    from app.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        user = user_from_stream_ticket(token, db)
+    finally:
+        db.close()
+    if not user:
+        await websocket.close(code=4401)
+        return
+    await websocket.accept()
+    await relay_audio_stream(websocket, user)
 
 
 @router.post("/audio")

@@ -35,8 +35,12 @@ def _provider() -> str:
 
 
 def _api_key() -> str:
-    """语音识别密钥:优先 ASR_API_KEY,未单独配置时复用百炼 DASHSCOPE_API_KEY"""
-    return settings.ASR_API_KEY or settings.DASHSCOPE_API_KEY
+    """语音识别密钥:百炼 provider 未单独配 Key 时复用 DASHSCOPE_API_KEY"""
+    if settings.ASR_API_KEY:
+        return settings.ASR_API_KEY
+    if _provider() in DASHSCOPE_PROVIDERS:
+        return settings.DASHSCOPE_API_KEY
+    return ""
 
 
 def asr_enabled() -> bool:

@@ -63,8 +63,12 @@ def _provider() -> str:
 
 
 def _api_key() -> str:
-    """识图密钥:优先 VISION_API_KEY,未单独配置时复用百炼 DASHSCOPE_API_KEY"""
-    return settings.VISION_API_KEY or settings.DASHSCOPE_API_KEY
+    """识图密钥:仅百炼地址下复用 DASHSCOPE_API_KEY,避免误用其它供应商"""
+    if settings.VISION_API_KEY:
+        return settings.VISION_API_KEY
+    if "dashscope" in (settings.VISION_API_BASE or "").lower():
+        return settings.DASHSCOPE_API_KEY
+    return ""
 
 
 def _local_ocr_script() -> Path:

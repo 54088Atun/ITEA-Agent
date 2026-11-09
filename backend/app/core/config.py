@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     ASR_API_BASE: str = ""
     ASR_API_KEY: str = ""
     ASR_MODEL: str = ""
+    # 百炼实时语音识别(浏览器边录边出字)
+    ASR_REALTIME_MODEL: str = "qwen-audio-3.1-asr-flash-message"
+    ASR_REALTIME_URL: str = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
     # 本地 ASR:模型名(tiny/base/small/medium)或本地模型目录,留空则关闭
     ASR_LOCAL_MODEL: str = ""
     ASR_LOCAL_DEVICE: str = "cpu"
