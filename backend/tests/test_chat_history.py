@@ -441,3 +441,19 @@ def test_persisted_user_text_keeps_raw_input(db):
     finally:
         chat_api._sessions.pop("unit-raw", None)
         chat_api._sessions.pop("unit-raw2", None)
+
+
+def test_remaining_output_avoids_duplicate_answer():
+    """最终回答补发不能把已经流式输出的正文再发一遍"""
+    # 正常增量:只补缺的尾部
+    assert chat_api._remaining_output("你好", "你好世界") == "世界"
+    # 已完整流出
+    assert chat_api._remaining_output("完整回答", "完整回答") == ""
+    # 工具调用前有前言:最终回答已是已流出内容的尾部
+    assert chat_api._remaining_output("我先查一下资料。最终回答", "最终回答") == ""
+    # 前缀重叠但末尾有补充
+    assert chat_api._remaining_output("前言最终回答", "最终回答补充") == "补充"
+    # 完全无法对齐时仍补发全文
+    assert chat_api._remaining_output("无关内容", "最终回答") == "最终回答"
+    # 未流式输出时补发全文
+    assert chat_api._remaining_output("", "最终回答") == "最终回答"

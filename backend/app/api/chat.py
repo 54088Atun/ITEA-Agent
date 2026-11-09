@@ -72,6 +72,24 @@ ANSWER_CACHE_MAX_ENTRIES = 2000
 SESSION_CACHE_MAX_ENTRIES = 500
 
 
+def _remaining_output(streamed: str, final: str) -> str:
+    """计算最终回答中还需补发的差额,避免整段回答重复输出
+
+    模型在调用工具前可能先流式输出一段前言,导致已流式内容不是最终回答的前缀;
+    此时直接补发全文会让同一段回答出现两遍,因此按"已流出内容的尾部与最终回答的
+    前缀重叠"对齐,只补真正缺失的部分。
+    """
+    if not streamed:
+        return final
+    if final.startswith(streamed):
+        return final[len(streamed):]
+    limit = min(len(streamed), len(final), 4000)
+    for size in range(limit, 0, -1):
+        if streamed.endswith(final[:size]):
+            return final[size:]
+    return final
+
+
 def _prune_answer_cache(now: Optional[datetime] = None) -> None:
     """清理过期幂等答案,并在超容量时按更新时间淘汰最旧记录"""
     now = now or datetime.utcnow()
@@ -919,7 +937,7 @@ async def _stream_graph(state: AgentState, db: Session, user: User,
             # 来源页脚在安全裁决之后追加:来源属引用元数据,不参与敏感级别判定
             final_output = append_sources_footer(final_output, holder["sources"])
             # 补发差额:节点可能补了标注(如 [AI 辅助参考]),或该节点没走流式(如 review 返回 JSON)
-            rest = final_output[len(streamed):] if final_output.startswith(streamed) else final_output
+            rest = _remaining_output(streamed, final_output)
             if not disconnected:
                 for i in range(0, len(rest), 48):
                     yield _sse_event("token", {"content": rest[i:i + 48]})
