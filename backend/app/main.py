@@ -59,6 +59,44 @@ configure_cors(app)
 # 请求级 request_id:日志/审计/上传拒绝/通知/轨迹共用同一标识
 app.add_middleware(RequestContextMiddleware)
 
+# 需要登录才能访问的静态资源前缀(上传文件/生成文件)
+PROTECTED_STATIC_PREFIXES = ("/uploads/", "/generated/", "/static/generated/")
+
+
+@app.middleware("http")
+async def protect_static_files(request, call_next):
+    """上传文件与生成文件必须携带登录 Cookie 或 Bearer Token。
+
+    学生成绩、教案、用户图片等不在公网匿名暴露;后端端口只监听 127.0.0.1,
+    因此该中间件对所有外部入口生效,无需额外网关配置。
+    """
+    if not request.url.path.startswith(PROTECTED_STATIC_PREFIXES):
+        return await call_next(request)
+
+    from fastapi import HTTPException
+    from fastapi.responses import JSONResponse
+    from app.api.auth import AUTH_COOKIE
+    from app.core.deps import user_from_token
+    from app.db.session import SessionLocal
+
+    token = request.cookies.get(AUTH_COOKIE) or ""
+    if not token:
+        header = request.headers.get("authorization") or ""
+        if header.lower().startswith("bearer "):
+            token = header[7:].strip()
+    if not token:
+        return JSONResponse({"detail": "未登录，无法访问该文件"}, status_code=401)
+
+    db = SessionLocal()
+    try:
+        user_from_token(token, db)
+    except HTTPException as exc:
+        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+    finally:
+        db.close()
+    return await call_next(request)
+
+
 
 # ---------- 启动事件 ----------
 @app.on_event("startup")

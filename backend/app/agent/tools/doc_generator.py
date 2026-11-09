@@ -7,6 +7,7 @@
 """
 import os
 import logging
+import uuid
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ def _generate_lesson_plan(data: dict) -> str:
         else:
             doc.add_paragraph(str(content))
 
-    filename = f"lesson_plan_{datetime.now().strftime('%Y%m%d%H%M%S')}.docx"
+    filename = f"lesson_plan_{uuid.uuid4().hex}.docx"
     filepath = os.path.join(OUTPUT_DIR, filename)
     doc.save(filepath)
     return filename
@@ -60,7 +61,7 @@ def _generate_preview_sheet(data: dict) -> str:
     for ref in data.get("references", ["教材相关章节"]):
         doc.add_paragraph(ref, style="List Bullet")
 
-    filename = f"preview_sheet_{datetime.now().strftime('%Y%m%d%H%M%S')}.docx"
+    filename = f"preview_sheet_{uuid.uuid4().hex}.docx"
     filepath = os.path.join(OUTPUT_DIR, filename)
     doc.save(filepath)
     return filename
@@ -111,7 +112,7 @@ def _generate_report(data: dict) -> str:
     for i, wp in enumerate(data.get("weak_points", [])[:10], 1):
         ws2.append([i, wp.get("point", ""), wp.get("avg_mastery", 0), wp.get("wrong_count", 0)])
 
-    filename = f"class_report_{datetime.now().strftime('%Y%m%d%H%M%S')}.xlsx"
+    filename = f"class_report_{uuid.uuid4().hex}.xlsx"
     filepath = os.path.join(OUTPUT_DIR, filename)
     wb.save(filepath)
     return filename

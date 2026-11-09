@@ -2,11 +2,14 @@
 from sqlalchemy import Column, BigInteger, String, Enum, DateTime, Integer, func
 from app.db.session import Base
 
+# SQLite 仅支持 INTEGER PRIMARY KEY 自增,测试库用变体兼容;MySQL 仍为 BIGINT
+BigIntPK = BigInteger().with_variant(Integer, "sqlite")
+
 
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(BigIntPK, primary_key=True, autoincrement=True)
     role = Column(Enum("teacher", "student", "admin", name="user_role"), nullable=False, index=True)
     admin_level = Column(String(20), nullable=True, comment="管理员级别: super/normal/observer")
     name = Column(String(50), nullable=False)

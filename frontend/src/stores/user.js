@@ -83,6 +83,8 @@ export const useUserStore = defineStore('user', {
       this.user = null
       localStorage.removeItem('itea_token')
       localStorage.removeItem('itea_user')
+      // 清除静态文件鉴权 Cookie;失败不影响本地退出
+      authApi.logout().catch(() => {})
     },
   },
 })

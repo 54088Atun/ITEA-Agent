@@ -85,9 +85,12 @@ def test_main_reconfigures_streams_to_utf8(monkeypatch):
 
 
 def test_auth_register_and_login_logs_use_masked_email(caplog, monkeypatch):
+    from types import SimpleNamespace
+
     from sqlalchemy import create_engine, event
     from sqlalchemy.orm import sessionmaker
     from sqlalchemy.pool import StaticPool
+    from starlette.responses import Response
 
     from app.api import auth as auth_api
     from app.db.session import Base
@@ -114,13 +117,16 @@ def test_auth_register_and_login_logs_use_masked_email(caplog, monkeypatch):
     monkeypatch.setattr(auth_api, "mask_email", spy_mask_email, raising=False)
     monkeypatch.setattr(auth_api, "hash_password", lambda password: "hashed")
     monkeypatch.setattr(auth_api, "verify_password", lambda password, hashed: True)
-    monkeypatch.setattr(auth_api, "_token_response", lambda user: user)
+    monkeypatch.setattr(
+        auth_api, "_token_response",
+        lambda user: SimpleNamespace(access_token="test-token"),
+    )
 
     with caplog.at_level(logging.INFO, logger="app.api.auth"):
         auth_api.register(RegisterRequest(
             role="student", name="Alice", email=email, password="secret",
-        ), db)
-        auth_api.login(LoginRequest(email=email, password="secret"), db)
+        ), Response(), db)
+        auth_api.login(LoginRequest(email=email, password="secret"), Response(), db)
 
     assert masked_calls == [email, email]
     assert email not in caplog.text

@@ -20,10 +20,8 @@ def _int_claim(payload: dict, key: str, default: int = 0) -> int | None:
         return None
 
 
-def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db),
-) -> User:
+def user_from_token(token: str, db: Session) -> User:
+    """校验 JWT 并返回用户;供 Authorization 头与静态文件 Cookie 复用"""
     credentials_exc = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="无效的认证凭据",
@@ -47,6 +45,13 @@ def get_current_user(
     if getattr(user, "status", "active") == "disabled":
         raise HTTPException(status_code=403, detail="账号已被禁用")
     return user
+
+
+def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    return user_from_token(token, db)
 
 
 def require_teacher(user: User = Depends(get_current_user)) -> User:
