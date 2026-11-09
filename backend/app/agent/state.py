@@ -31,6 +31,7 @@ class AgentState(TypedDict):
     collab_results: List[Dict]     # 各专家结论 [{"agent", "label", "task", "output", "status"}]
 
     # === 工具与检索 ===
+    retrieval_available: bool     # 课程资料与索引是否就绪;False 时跳过强制检索并隐藏检索工具
     tool_calls: List[Dict]         # 待调用工具 [{"name": "...", "args": {...}}]
     tool_approvals: Optional[List[str]]  # 服务端可信审批:用户已确认的高危工具名
     tool_results: Dict             # 工具返回结果 {"tool_name": result}

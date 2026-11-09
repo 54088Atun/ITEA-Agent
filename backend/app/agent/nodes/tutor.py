@@ -27,6 +27,7 @@ SMALL_TALK_PATTERN = (
     "再见", "拜拜", "好的", "ok", "嗯", "早上好", "晚上好", "晚安",
 )
 SMALL_TALK_MAX_LEN = 12
+RETRIEVAL_TOOLS = ("course_evidence", "rag_search")
 
 
 def _build_messages(state: AgentState, system_prompt: str) -> list[dict]:
@@ -114,6 +115,8 @@ async def tutor_node(state: AgentState) -> dict:
     user_input = state["messages"][-1]["content"] if state.get("messages") else ""
     course_id = state.get("course_id")
     user_role = state.get("user_role", "student")
+    # 课程没有资料/索引时,不再强制检索,也不向模型暴露检索工具
+    retrieval_ready = bool(state.get("retrieval_available", True))
 
     # 1. 工具化取数:检索与学情改为模型按需调用,不再每轮预取
     template = load_prompt("tutor")
@@ -136,7 +139,18 @@ async def tutor_node(state: AgentState) -> dict:
         fetch_memories(state.get("user_id") or 0, course_id, user_role),
     )
     # 计划消费:把本轮规划注入提示词,避免"计划说检索、实际没检索"
-    system_prompt += render_plan(state.get("task_plan") or [])
+    plan_items = state.get("task_plan") or []
+    if not retrieval_ready:
+        plan_items = [
+            item for item in plan_items
+            if (item or {}).get("tool") not in RETRIEVAL_TOOLS
+        ]
+    system_prompt += render_plan(plan_items)
+    if not retrieval_ready:
+        system_prompt += (
+            "\n\n【检索能力】本课程尚未配置可检索资料，请基于通用知识回答；"
+            "不要声称引用了课程讲义、页码或课程原始资料。"
+        )
 
     messages = _build_messages(state, system_prompt)
 
@@ -156,7 +170,7 @@ async def tutor_node(state: AgentState) -> dict:
     # 3. 课程事实题保底检索一次:防止模型跳过检索直接编造课程内容
     # 未选课程时不强制检索:course_evidence 的 course_id 必填,强调用必然被网关拒绝
     forced_call = None
-    if course_id and not _is_small_talk(user_input):
+    if course_id and retrieval_ready and not _is_small_talk(user_input):
         forced_call = {
             "id": "forced_course_evidence",
             "name": "course_evidence",
@@ -170,12 +184,19 @@ async def tutor_node(state: AgentState) -> dict:
             return await llm_invoke(history, tools=tools, sink=sink)
         return await llm_invoke(history, sink=sink)
 
+    tools = tool_schemas_for_role(user_role)
+    if not retrieval_ready:
+        tools = [
+            schema for schema in tools
+            if schema.get("name") not in RETRIEVAL_TOOLS
+        ]
+
     try:
         output, trace = await run_tool_loop(
             messages,
             state,
             planner=planner,
-            tools=tool_schemas_for_role(user_role),
+            tools=tools,
             forced_call=forced_call,
             approval=state.get("tool_approvals"),
             sink=state.get("stream_queue"),

@@ -467,9 +467,12 @@ async def collab_merge_node(state: AgentState) -> dict:
         item.get("status") == "error" for item in results
     )
 
-    evidence = fetch_course_evidence(
-        user_input, state.get("course_id"),
-        state["user_id"], state.get("user_role", "student"),
+    evidence = (
+        fetch_course_evidence(
+            user_input, state.get("course_id"),
+            state["user_id"], state.get("user_role", "student"),
+        )
+        if state.get("retrieval_available", True) else {}
     )
     raw_context = evidence.get("context", "")
     rag_context, _ = build_rag_context(evidence, user_input)

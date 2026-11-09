@@ -135,17 +135,23 @@ class RAGManager:
             "index", "success", (time.monotonic() - started_at) * 1000,
         )
 
+    def index_ready(self, course_id: int) -> bool:
+        """索引文件是否就绪(不加载 faiss,便于每轮快速判断)"""
+        idx_path = os.path.join(self._index_dir, f"course_{course_id}.index")
+        meta_path = os.path.join(self._index_dir, f"course_{course_id}.json")
+        return os.path.exists(idx_path) and os.path.exists(meta_path)
+
     def load_index(self, course_id: int) -> bool:
         """加载已有索引,成功返回 True"""
         if course_id in self._indexes:
             return True
+        idx_path = os.path.join(self._index_dir, f"course_{course_id}.index")
+        meta_path = os.path.join(self._index_dir, f"course_{course_id}.json")
+        if not (os.path.exists(idx_path) and os.path.exists(meta_path)):
+            return False
         try:
             import faiss
 
-            idx_path = os.path.join(self._index_dir, f"course_{course_id}.index")
-            meta_path = os.path.join(self._index_dir, f"course_{course_id}.json")
-            if not (os.path.exists(idx_path) and os.path.exists(meta_path)):
-                return False
             index = faiss.read_index(idx_path)
             with open(meta_path, "r", encoding="utf-8") as f:
                 chunks = json.load(f)
@@ -207,6 +213,11 @@ def get_manager() -> RAGManager:
     if _manager is None:
         _manager = RAGManager()
     return _manager
+
+
+def index_ready(course_id: int) -> bool:
+    """不加载模型的轻量索引就绪判断"""
+    return get_manager().index_ready(course_id)
 
 
 # ---------- 工具入口 ----------

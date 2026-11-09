@@ -20,6 +20,7 @@ from app.agent.nodes.tool_executor import tool_schemas_for_role
 logger = logging.getLogger(__name__)
 
 MAX_HISTORY = 6
+RETRIEVAL_TOOLS = ("course_evidence", "rag_search")
 
 
 def _collect_evidence(trace: list[dict]) -> tuple[str, list[dict], list[str], list[str]]:
@@ -68,6 +69,7 @@ async def teacher_node(state: AgentState) -> dict:
     user_id = state["user_id"]
     user_role = state.get("user_role", "teacher")
     user_input = state["messages"][-1]["content"] if state.get("messages") else ""
+    retrieval_ready = bool(state.get("retrieval_available", True))
 
     # 1. 大纲是课程级固定上下文,每次备课都需要,保留预取
     syllabus = fetch_syllabus(course_id, user_id, user_role)
@@ -90,7 +92,18 @@ async def teacher_node(state: AgentState) -> dict:
             + reflection_notes
         )
     # 计划消费:让模型按本轮规划决定取数顺序
-    system_prompt += render_plan(state.get("task_plan") or [])
+    plan_items = state.get("task_plan") or []
+    if not retrieval_ready:
+        plan_items = [
+            item for item in plan_items
+            if (item or {}).get("tool") not in RETRIEVAL_TOOLS
+        ]
+    system_prompt += render_plan(plan_items)
+    if not retrieval_ready:
+        system_prompt += (
+            "\n\n【检索能力】本课程尚未配置可检索资料，请基于课程大纲与通用知识作答；"
+            "不要声称引用了课程讲义、页码或课程原始资料。"
+        )
 
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(build_history(state.get("messages", []), limit=MAX_HISTORY))
@@ -103,12 +116,18 @@ async def teacher_node(state: AgentState) -> dict:
         return await llm_invoke(history, sink=sink)
 
     # 2. 工具循环按需取数(检索/统计/SQL/导出),不再用关键词判断任务类型
+    tools = tool_schemas_for_role(user_role)
+    if not retrieval_ready:
+        tools = [
+            schema for schema in tools
+            if schema.get("name") not in RETRIEVAL_TOOLS
+        ]
     try:
         output, trace = await run_tool_loop(
             messages,
             state,
             planner=planner,
-            tools=tool_schemas_for_role(user_role),
+            tools=tools,
             approval=state.get("tool_approvals"),
             sink=state.get("stream_queue"),
         )

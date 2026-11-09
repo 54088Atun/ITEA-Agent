@@ -36,6 +36,7 @@ from app.services.security_levels import (
 )
 from app.services.runtime_metrics import record_runtime_metric
 from app.services.prompt_guard import sanitize_untrusted
+from app.services.retrieval import retrieval_available as check_retrieval_available
 from app.services.tool_approval import verify_tool_token
 from app.services.agent_runs import (
     start_run, finish_run, find_run_by_request, add_dead_letter,
@@ -313,6 +314,7 @@ def _build_initial_state(req: ChatRequest, user: User) -> AgentState:
         admin_level=user.admin_level,
         user_name=user.name,
         course_id=req.course_id,
+        retrieval_available=check_retrieval_available(req.course_id),
         interview_assignment_id=getattr(req, "interview_assignment_id", None),
         intent="",
         branch="",

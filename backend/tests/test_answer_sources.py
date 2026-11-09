@@ -197,6 +197,8 @@ def test_stream_response_appends_sources_footer(monkeypatch):
     monkeypatch.setattr(chat_api, "_persist_turn_sync", lambda *a, **k: None)
     monkeypatch.setattr(chat_api, "_sessions", {})
     monkeypatch.setattr(chat_api, "_session_owner", {})
+    # 本用例只验证来源页脚链路,检索能力视为已就绪
+    monkeypatch.setattr(chat_api, "check_retrieval_available", lambda course_id: True)
 
     user = SimpleNamespace(id=1, role="student", admin_level=None, name="学生")
 

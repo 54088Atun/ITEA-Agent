@@ -95,7 +95,10 @@ async def review_node(state: AgentState) -> dict:
     user_role = state.get("user_role", "student")
     profile = fetch_profile(state["user_id"], course_id, user_role)
     snapshot_str = compress_profile(profile)
-    evidence = fetch_course_evidence(user_input, course_id, state["user_id"], user_role)
+    evidence = (
+        fetch_course_evidence(user_input, course_id, state["user_id"], user_role)
+        if state.get("retrieval_available", True) else {}
+    )
     raw_context = evidence.get("context", "")
     rag_context, _ = build_rag_context(evidence, user_input)
     sources = build_sources(

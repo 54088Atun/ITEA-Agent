@@ -444,3 +444,31 @@ def test_tutor_forces_retrieval_for_course_question(monkeypatch):
     assert len(calls) == 1, "课程事实题应至少检索一次"
     labels = [item["label"] for item in result["sources"]]
     assert "第3章_二叉树.pdf" in labels
+
+
+def test_tutor_skips_retrieval_when_course_has_no_index(monkeypatch):
+    """课程无资料/索引时跳过强制检索,并隐藏检索工具与计划步骤"""
+    calls = []
+    captured = {}
+    monkeypatch.setitem(
+        TOOL_REGISTRY, "course_evidence",
+        lambda **kw: calls.append(kw) or {"context": "", "fragments": []},
+    )
+
+    async def fake_llm(messages, sink=None, tools=None):
+        captured["system"] = messages[0]["content"]
+        captured["tools"] = [tool["name"] for tool in (tools or [])]
+        return "基于通用知识回答。"
+
+    monkeypatch.setattr(tutor_module, "llm_invoke", fake_llm)
+    state = _state(
+        retrieval_available=False,
+        task_plan=[{"step": 1, "title": "先检索课程资料", "tool": "course_evidence"}],
+    )
+    asyncio.run(tutor_module.tutor_node(state))
+
+    assert calls == [], "无索引时不应发起强制检索"
+    assert "course_evidence" not in captured["tools"]
+    assert "rag_search" not in captured["tools"]
+    assert "尚未配置可检索资料" in captured["system"]
+    assert "先检索课程资料" not in captured["system"]
