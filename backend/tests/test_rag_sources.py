@@ -228,6 +228,11 @@ def test_lexical_search_without_vector_deps(tmp_path, monkeypatch):
     assert manager.search("进程调度", 10, scope="syllabus") == []
     assert manager.search("量子纠缠实验", 10) == []
 
+    # 索引文件被清理后,内存缓存同步失效,不再返回已删除内容
+    (tmp_path / "course_10.json").unlink()
+    assert manager.index_ready(10) is False
+    assert manager.search("二叉树的中序遍历", 10) == []
+
 
 def test_rebuild_course_index_after_material_parse(scope_env, tmp_path, monkeypatch):
     from app.services.material_parse_jobs import enqueue, run_parse_job

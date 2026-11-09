@@ -177,10 +177,13 @@ class RAGManager:
 
     def load_index(self, course_id: int) -> bool:
         """加载已有索引,成功返回 True;向量索引不可用时仅加载 chunks"""
-        if course_id in self._indexes:
-            return True
         idx_path = os.path.join(self._index_dir, f"course_{course_id}.index")
         meta_path = os.path.join(self._index_dir, f"course_{course_id}.json")
+        if course_id in self._indexes:
+            # 元数据被外部清理(素材删除/重建)时同步失效内存缓存,避免返回已删除内容
+            if os.path.exists(meta_path):
+                return True
+            self._indexes.pop(course_id, None)
         if not os.path.exists(meta_path):
             return False
         try:
