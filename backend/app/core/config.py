@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     # 图形验证码:登录/注册前校验,一次性、5 分钟有效
     CAPTCHA_ENABLED: bool = True
     CAPTCHA_TTL_SECONDS: int = 300
+    # 验证码存储:memory(默认,单进程) 或 file(共享目录,多进程/多实例)
+    CAPTCHA_STORE: str = "memory"
+    CAPTCHA_STORE_DIR: str = "data/captcha"
     # 登录限流:账号维度与 IP 维度(失败次数/窗口秒)
     LOGIN_IP_MAX_FAILURES: int = 20
     LOGIN_IP_WINDOW_SECONDS: int = 300

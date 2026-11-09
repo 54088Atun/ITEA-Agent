@@ -20,8 +20,10 @@ from app.services import captcha as captcha_service
 @pytest.fixture(autouse=True)
 def _clean_captcha_store():
     captcha_service._store.clear()
+    captcha_service._generate_count = 0
     yield
     captcha_service._store.clear()
+    captcha_service._generate_count = 0
 
 
 @pytest.fixture()
@@ -66,6 +68,34 @@ def test_expired_captcha_fails():
     code = captcha_service._store[data["captcha_id"]][0]
     # 直接把有效期改到过去,避免 patch 全局 time 模块
     captcha_service._store[data["captcha_id"]] = (code, time.time() - 1)
+
+    assert captcha_service.verify_captcha(data["captcha_id"], code) is False
+
+
+def test_file_store_shared_once(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "CAPTCHA_STORE", "file")
+    monkeypatch.setattr(settings, "CAPTCHA_STORE_DIR", str(tmp_path))
+
+    data = captcha_service.generate_captcha()
+    entries = list(tmp_path.iterdir())
+    assert len(entries) == 1
+    assert captcha_service._store == {}
+
+    code = entries[0].read_text(encoding="utf-8").splitlines()[0]
+    # 另一个进程/实例读同一目录即可校验
+    assert captcha_service.verify_captcha(data["captcha_id"], code.lower()) is True
+    assert list(tmp_path.iterdir()) == []
+    assert captcha_service.verify_captcha(data["captcha_id"], code) is False
+
+
+def test_file_store_expired_entry_fails(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "CAPTCHA_STORE", "file")
+    monkeypatch.setattr(settings, "CAPTCHA_STORE_DIR", str(tmp_path))
+
+    data = captcha_service.generate_captcha()
+    entry = list(tmp_path.iterdir())[0]
+    code = entry.read_text(encoding="utf-8").splitlines()[0]
+    entry.write_text(f"{code}\n{int(time.time()) - 1}", encoding="utf-8")
 
     assert captcha_service.verify_captcha(data["captcha_id"], code) is False
 
