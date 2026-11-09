@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     # 控制台审核通过的邮件模板 ID;留空时回退为直接发送 HTML 正文
     ALIYUN_MAIL_TEMPLATE_REGISTER: str = ""
     ALIYUN_MAIL_TEMPLATE_RESET_PASSWORD: str = ""
+    ALIYUN_MAIL_TEMPLATE_CHANGE_EMAIL: str = ""
     ALIYUN_MAIL_TIMEOUT: int = 8
 
     # 邮箱验证策略:开启后未验证账号禁止登录

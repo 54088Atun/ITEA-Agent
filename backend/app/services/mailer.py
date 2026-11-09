@@ -30,10 +30,12 @@ ALIYUN_MAIL_ACTION = "SingleSendMail"
 _SUBJECTS = {
     "register": "【ITEA】注册验证码",
     "reset_password": "【ITEA】密码重置验证码",
+    "change_email": "【ITEA】邮箱变更验证码",
 }
 _PURPOSE_TEXT = {
     "register": "注册账号",
     "reset_password": "重置密码",
+    "change_email": "更换绑定邮箱",
 }
 
 
@@ -67,6 +69,7 @@ def template_id_for(purpose: str) -> str:
     mapping = {
         "register": settings.ALIYUN_MAIL_TEMPLATE_REGISTER,
         "reset_password": settings.ALIYUN_MAIL_TEMPLATE_RESET_PASSWORD,
+        "change_email": settings.ALIYUN_MAIL_TEMPLATE_CHANGE_EMAIL,
     }
     return (mapping.get(purpose) or "").strip()
 

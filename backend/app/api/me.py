@@ -71,11 +71,14 @@ def update_profile(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if req.email and req.email != user.email:
-        exists = db.query(User).filter(User.email == req.email, User.id != user.id).first()
-        if exists:
-            raise HTTPException(status_code=400, detail="该邮箱已被占用")
-        user.email = req.email
+    # 邮箱是找回密码的凭据,必须走验证码换绑接口,资料保存只允许未变更的同值提交
+    if req.email is not None and (
+        req.email.strip().lower() != (user.email or "").strip().lower()
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="更改邮箱需先通过邮箱验证码验证",
+        )
     if req.name is not None:
         user.name = req.name
     db.commit()

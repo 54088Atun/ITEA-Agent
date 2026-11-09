@@ -20,6 +20,13 @@ export const authApi = {
   resetPassword(payload) {
     return http.post('/auth/password/reset', payload, { silent: true })
   },
+  // 个人中心换绑邮箱:向新邮箱发码 / 校验并换绑
+  sendEmailChangeCode(payload) {
+    return http.post('/auth/email/change/code', payload, { silent: true })
+  },
+  changeEmail(payload) {
+    return http.post('/auth/email/change', payload, { silent: true })
+  },
   me() {
     return http.get('/auth/me')
   },

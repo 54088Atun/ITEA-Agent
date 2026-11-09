@@ -55,6 +55,19 @@ class PasswordResetRequest(BaseModel):
         return check_password_strength(value)
 
 
+class EmailChangeCodeRequest(BaseModel):
+    """已登录用户换绑邮箱:向新邮箱发送验证码"""
+
+    email: EmailStr
+
+
+class EmailChangeRequest(BaseModel):
+    """已登录用户换绑邮箱:校验新邮箱验证码"""
+
+    email: EmailStr
+    code: str = Field(..., min_length=4, max_length=10)
+
+
 class UserOut(BaseModel):
     id: int
     role: str

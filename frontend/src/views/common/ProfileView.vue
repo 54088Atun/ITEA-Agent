@@ -71,7 +71,12 @@
           <el-input v-model="form.name" maxlength="50" />
         </el-form-item>
         <el-form-item label="邮箱">
-          <el-input v-model="form.email" />
+          <div class="email-row">
+            <span class="email-row__text">{{ form.email || '未填写' }}</span>
+            <el-button size="small" text type="primary" @click="openEmailChange">
+              更换邮箱
+            </el-button>
+          </div>
         </el-form-item>
         <el-form-item>
           <el-button type="primary" :loading="saving" @click="saveProfile">保存资料</el-button>
@@ -261,6 +266,40 @@
       </p>
     </div>
 
+    <!-- 更换邮箱 -->
+    <el-dialog v-model="emailChangeVisible" title="更换邮箱" width="420px" @closed="resetEmailChange">
+      <el-alert
+        type="info" :closable="false" show-icon
+        title="验证码将发送到新邮箱，验证通过后立即生效；新邮箱不能已被其他账号使用。"
+      />
+      <el-form label-position="top" class="mt">
+        <el-form-item label="当前邮箱">
+          <el-input :model-value="form.email" disabled />
+        </el-form-item>
+        <el-form-item label="新邮箱">
+          <el-input v-model="emailChange.email" placeholder="name@campus.edu" />
+        </el-form-item>
+        <el-form-item label="邮箱验证码">
+          <div class="email-code-row">
+            <el-input v-model="emailChange.code" maxlength="6" placeholder="6 位验证码" />
+            <el-button
+              :loading="emailCodeSending"
+              :disabled="emailCodeCountdown > 0"
+              @click="sendEmailChangeCode"
+            >
+              {{ emailCodeCountdown > 0 ? `${emailCodeCountdown}s 后重发` : '发送验证码' }}
+            </el-button>
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="emailChangeVisible = false">取消</el-button>
+        <el-button type="primary" :loading="emailChanging" @click="submitEmailChange">
+          确认更换
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- 注销确认 -->
     <el-dialog v-model="deactivateVisible" title="注销账号" width="480px">
       <el-alert
@@ -284,9 +323,10 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { authApi } from '../../api/auth'
 import { meApi } from '../../api/me'
 import { recordsApi } from '../../api/records'
 import { classroomApi } from '../../api/classroom'
@@ -332,6 +372,18 @@ const exporting = ref(false)
 const deactivateVisible = ref(false)
 const deactivating = ref(false)
 const deactivateForm = reactive({ password: '', confirm: '' })
+
+// 更换邮箱:验证码发送到新邮箱,验证通过后生效
+const emailChangeVisible = ref(false)
+const emailChange = reactive({ email: '', code: '' })
+const emailCodeSending = ref(false)
+const emailChanging = ref(false)
+const emailCodeCountdown = ref(0)
+let emailCodeTimer = null
+
+onUnmounted(() => {
+  if (emailCodeTimer) clearInterval(emailCodeTimer)
+})
 
 const initial = computed(() => (form.name || '?').slice(0, 1))
 const roleLabel = computed(() => {
@@ -410,12 +462,80 @@ async function saveProfile() {
   if (!form.name.trim()) return ElMessage.warning('姓名不能为空')
   saving.value = true
   try {
-    const data = await meApi.update({ name: form.name.trim(), email: form.email.trim() })
+    // 邮箱变更必须走验证码流程,这里只保存姓名
+    const data = await meApi.update({ name: form.name.trim() })
     userStore.user = { ...(userStore.user || {}), ...data }
     localStorage.setItem('itea_user', JSON.stringify(userStore.user))
     ElMessage.success('资料已保存')
   } catch { /* 拦截器已提示 */ } finally {
     saving.value = false
+  }
+}
+
+function errorText(err, fallback) {
+  const detail = err?.response?.data?.detail
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail) && detail.length) return detail[0]?.msg || fallback
+  if (!err?.response) return '无法连接服务器，请稍后重试'
+  return fallback
+}
+
+function startEmailCountdown(seconds, previous) {
+  if (previous) clearInterval(previous)
+  emailCodeCountdown.value = Math.max(1, Number(seconds) || 60)
+  const handle = setInterval(() => {
+    emailCodeCountdown.value -= 1
+    if (emailCodeCountdown.value <= 0) clearInterval(handle)
+  }, 1000)
+  return handle
+}
+
+function openEmailChange() {
+  emailChange.email = ''
+  emailChange.code = ''
+  emailCodeCountdown.value = 0
+  emailChangeVisible.value = true
+}
+
+function resetEmailChange() {
+  emailChange.email = ''
+  emailChange.code = ''
+}
+
+async function sendEmailChangeCode() {
+  const email = emailChange.email.trim()
+  if (!email) return ElMessage.warning('请输入新邮箱')
+  if (email.toLowerCase() === (form.email || '').trim().toLowerCase()) {
+    return ElMessage.warning('新邮箱与当前邮箱相同')
+  }
+  emailCodeSending.value = true
+  try {
+    const data = await authApi.sendEmailChangeCode({ email })
+    emailCodeTimer = startEmailCountdown(data.resend_after, emailCodeTimer)
+    ElMessage.success(`验证码已发送至 ${data.masked_email || email}`)
+  } catch (err) {
+    ElMessage.error(errorText(err, '发送失败，请稍后重试'))
+  } finally {
+    emailCodeSending.value = false
+  }
+}
+
+async function submitEmailChange() {
+  const email = emailChange.email.trim()
+  if (!email) return ElMessage.warning('请输入新邮箱')
+  if (!emailChange.code.trim()) return ElMessage.warning('请输入邮箱验证码')
+  emailChanging.value = true
+  try {
+    const data = await authApi.changeEmail({ email, code: emailChange.code.trim() })
+    form.email = data.email
+    userStore.user = { ...(userStore.user || {}), ...data }
+    localStorage.setItem('itea_user', JSON.stringify(userStore.user))
+    emailChangeVisible.value = false
+    ElMessage.success('邮箱已更换')
+  } catch (err) {
+    ElMessage.error(errorText(err, '更换失败，请稍后重试'))
+  } finally {
+    emailChanging.value = false
   }
 }
 
@@ -649,6 +769,27 @@ function formatTime(t) {
 }
 .profile-form {
   max-width: 420px;
+}
+.email-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+}
+.email-row__text {
+  flex: 1;
+  font-size: var(--fs-sm);
+  color: var(--text-primary);
+}
+.email-code-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+}
+.email-code-row :deep(.el-button) {
+  flex: 0 0 auto;
+  min-width: 108px;
 }
 .profile-overview {
   display: grid;

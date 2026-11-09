@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -22,15 +23,16 @@ from app.core.request_context import get_client_ip
 from app.models.log import OperationLog
 from app.models.user import User
 from app.schemas.auth import (
-    EmailCodeRequest, EmailVerifyRequest, LoginRequest, PasswordResetRequest,
-    RegisterRequest, TokenResponse, UserOut,
+    EmailChangeCodeRequest, EmailChangeRequest, EmailCodeRequest,
+    EmailVerifyRequest, LoginRequest, PasswordResetRequest, RegisterRequest,
+    TokenResponse, UserOut,
 )
 from app.services.captcha import (
     captcha_required, generate_captcha, verify_captcha,
 )
 from app.services.email_verification import (
-    PURPOSE_REGISTER, PURPOSE_RESET_PASSWORD, assert_can_send, consume_code,
-    issue_code, normalize_email,
+    PURPOSE_CHANGE_EMAIL, PURPOSE_REGISTER, PURPOSE_RESET_PASSWORD,
+    assert_can_send, consume_code, issue_code, normalize_email,
 )
 
 logger = logging.getLogger(__name__)
@@ -344,6 +346,64 @@ def reset_password(req: PasswordResetRequest, db: Session = Depends(get_db)):
 
     logger.info("用户自助重置密码: %s", mask_email(user.email))
     return {"ok": True}
+
+
+@router.post("/email/change/code")
+def send_change_email_code(
+    req: EmailChangeCodeRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """已登录用户换绑邮箱:向新邮箱发送验证码,验证新地址归属"""
+    email = normalize_email(req.email)
+    if email == normalize_email(user.email):
+        raise HTTPException(status_code=400, detail="新邮箱与当前邮箱相同")
+    occupied = db.query(User).filter(
+        User.email == email, User.id != user.id,
+    ).first()
+    if occupied is not None:
+        raise HTTPException(status_code=409, detail="该邮箱已被其他账号使用")
+
+    ip = get_client_ip()
+    assert_can_send(db, email, PURPOSE_CHANGE_EMAIL, ip)
+    issued = issue_code(db, email, PURPOSE_CHANGE_EMAIL, ip)
+    return {
+        "ok": True,
+        "expires_in": issued["expires_in"],
+        "resend_after": issued["resend_after"],
+        "masked_email": mask_email(email),
+    }
+
+
+@router.post("/email/change", response_model=UserOut)
+def change_email(
+    req: EmailChangeRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """校验新邮箱验证码并完成换绑;换绑后该邮箱立即视为已验证"""
+    email = normalize_email(req.email)
+    if email == normalize_email(user.email):
+        raise HTTPException(status_code=400, detail="新邮箱与当前邮箱相同")
+    occupied = db.query(User).filter(
+        User.email == email, User.id != user.id,
+    ).first()
+    if occupied is not None:
+        raise HTTPException(status_code=409, detail="该邮箱已被其他账号使用")
+
+    consume_code(db, email, PURPOSE_CHANGE_EMAIL, req.code)
+
+    user.email = email
+    user.email_verified_at = datetime.utcnow()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该邮箱已被其他账号使用")
+    db.refresh(user)
+
+    logger.info("更换绑定邮箱: user=%s", user.id)
+    return user
 
 
 @router.post("/login", response_model=TokenResponse)

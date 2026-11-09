@@ -18,8 +18,8 @@ from app import models  # noqa: F401 - 注册全部表,供迁移用例建库
 from app.models.email_verification import EmailVerificationCode
 from app.models.user import User
 from app.schemas.auth import (
-    EmailCodeRequest, EmailVerifyRequest, LoginRequest, PasswordResetRequest,
-    RegisterRequest,
+    EmailChangeCodeRequest, EmailChangeRequest, EmailCodeRequest,
+    EmailVerifyRequest, LoginRequest, PasswordResetRequest, RegisterRequest,
 )
 from app.services import email_verification as ev
 from app.services.mailer import MailSendError
@@ -261,6 +261,71 @@ def test_reset_password_does_not_leak_unknown_email(db):
     response = _send(db, "missing@example.com", "reset_password")
     assert response["ok"] is True
     assert db.query(EmailVerificationCode).count() == 0
+
+
+# ---------- 个人中心换绑邮箱 ----------
+
+def test_change_email_code_rejects_same_and_occupied(db):
+    user = db.query(User).filter(User.id == 1).one()
+
+    with pytest.raises(HTTPException) as exc:
+        auth_api.send_change_email_code(
+            EmailChangeCodeRequest(email=VERIFIED_EMAIL), user, db,
+        )
+    assert exc.value.status_code == 400
+    assert "相同" in exc.value.detail
+
+    with pytest.raises(HTTPException) as exc:
+        auth_api.send_change_email_code(
+            EmailChangeCodeRequest(email=UNVERIFIED_EMAIL), user, db,
+        )
+    assert exc.value.status_code == 409
+
+
+def test_change_email_requires_code_and_updates(db):
+    user = db.query(User).filter(User.id == 1).one()
+    new_email = "changed@example.com"
+
+    auth_api.send_change_email_code(
+        EmailChangeCodeRequest(email=new_email), user, db,
+    )
+    code = ev.latest_dev_code(new_email, "change_email")
+    wrong = "000000" if code != "000000" else "111111"
+
+    with pytest.raises(HTTPException) as exc:
+        auth_api.change_email(
+            EmailChangeRequest(email=new_email, code=wrong), user, db,
+        )
+    assert exc.value.status_code == 400
+
+    result = auth_api.change_email(
+        EmailChangeRequest(email=new_email, code=code), user, db,
+    )
+    assert result.email == new_email
+
+    db.expire_all()
+    refreshed = db.query(User).filter(User.id == 1).one()
+    assert refreshed.email == new_email
+    assert refreshed.email_verified_at is not None
+
+
+def test_profile_update_rejects_direct_email_change(db):
+    from app.api import me as me_api
+
+    user = db.query(User).filter(User.id == 1).one()
+
+    with pytest.raises(HTTPException) as exc:
+        me_api.update_profile(
+            me_api.ProfileUpdate(email="another@example.com"), user, db,
+        )
+    assert exc.value.status_code == 400
+    assert "验证码" in exc.value.detail
+
+    # 同值提交(兼容旧前端)不受影响
+    updated = me_api.update_profile(
+        me_api.ProfileUpdate(name="新名字", email=VERIFIED_EMAIL), user, db,
+    )
+    assert updated.name == "新名字"
 
 
 # ---------- 存量兼容 ----------

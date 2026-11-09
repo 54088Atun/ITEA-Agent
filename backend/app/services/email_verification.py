@@ -23,7 +23,10 @@ logger = logging.getLogger(__name__)
 
 PURPOSE_REGISTER = "register"
 PURPOSE_RESET_PASSWORD = "reset_password"
-VALID_PURPOSES = (PURPOSE_REGISTER, PURPOSE_RESET_PASSWORD)
+PURPOSE_CHANGE_EMAIL = "change_email"
+VALID_PURPOSES = (
+    PURPOSE_REGISTER, PURPOSE_RESET_PASSWORD, PURPOSE_CHANGE_EMAIL,
+)
 
 # 开发/测试环境最近一次签发的明文码,仅用于联调与自动化测试
 _dev_codes: dict[tuple[str, str], str] = {}
