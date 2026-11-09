@@ -102,6 +102,13 @@ async def _process_image(file: UploadFile, user: User, db: Session) -> dict:
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="图片为空")
+    # 识图未配置时直接拒绝,不落盘、不消耗每日配额
+    enabled = vision_enabled()
+    if not enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="识图服务未配置，请直接输入题目文字",
+        )
     # 能力开关 + 大小 + 每日次数
     assert_image_upload_allowed(db, user, len(data))
 
@@ -112,16 +119,14 @@ async def _process_image(file: UploadFile, user: User, db: Session) -> dict:
     path.write_bytes(data)
     record_image_upload(db, user, len(data))
 
-    enabled = vision_enabled()
     text = None
     description = ""
     error = None
-    if enabled:
-        try:
-            text = await describe_image(path, mime)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("图片识图失败: %s", safe_exception(e))
-            error = "识图服务暂时不可用，请手动输入题目内容"
+    try:
+        text = await describe_image(path, mime)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("图片识图失败: %s", safe_exception(e))
+        error = "识图服务暂时不可用，请手动输入题目内容"
 
     if vlm_enabled():
         description = await describe_image_semantics(path)

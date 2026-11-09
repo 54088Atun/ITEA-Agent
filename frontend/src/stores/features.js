@@ -5,11 +5,15 @@ import { recordsApi } from '../api/records'
 export const features = reactive({
   loaded: false,
   feature_image_vision: true,
+  vision_ready: false,
+  vlm_ready: false,
   feature_assignments: true,
   feature_course_share: true,
   feature_exams: true,
   upload_image_max_mb: 8,
   vision_daily_limit: 30,
+  feature_asr: false,
+  asr_ready: false,
 })
 
 export async function loadFeatures() {

@@ -58,7 +58,9 @@ def _token_response(user: User) -> TokenResponse:
 
 @router.post("/register", response_model=TokenResponse)
 def register(req: RegisterRequest, response: Response, db: Session = Depends(get_db)):
-    """用户注册(教师/学生)"""
+    """用户注册(公开注册仅开放学生;教师账号需管理员开通)"""
+    if req.role != "student":
+        raise HTTPException(status_code=403, detail="教师账号需由管理员开通")
     existing = db.query(User).filter(User.email == req.email).first()
     if existing:
         raise HTTPException(status_code=400, detail="该邮箱已注册")

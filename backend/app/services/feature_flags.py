@@ -5,7 +5,9 @@
 from sqlalchemy.orm import Session
 
 from app.models.log import SystemConfig
+from app.services.asr import asr_enabled
 from app.services.capabilities import role_capabilities
+from app.services.vision import vlm_enabled, vision_enabled
 
 FEATURE_DEFAULTS = {
     "feature_image_vision": ("on", "图片识图开关(on/off)"),
@@ -52,12 +54,15 @@ def public_features(db: Session, role: str = "student") -> dict:
     return {
         "capabilities": role_capabilities(role),
         "feature_image_vision": is_enabled(db, "feature_image_vision"),
+        "vision_ready": is_enabled(db, "feature_image_vision") and vision_enabled(),
+        "vlm_ready": vlm_enabled(),
         "feature_assignments": is_enabled(db, "feature_assignments"),
         "feature_course_share": is_enabled(db, "feature_course_share"),
         "feature_exams": is_enabled(db, "feature_exams"),
         "upload_image_max_mb": max(1, min(get_int(db, "upload_image_max_mb", 8), 20)),
         "vision_daily_limit": max(0, get_int(db, "vision_daily_limit", 30)),
         "feature_asr": is_enabled(db, "feature_asr"),
+        "asr_ready": is_enabled(db, "feature_asr") and asr_enabled(),
         "asr_max_mb": max(1, min(get_int(db, "asr_max_mb", 10), 50)),
         "asr_max_seconds": max(0, get_int(db, "asr_max_seconds", 300)),
         "asr_daily_limit": max(0, get_int(db, "asr_daily_limit", 50)),

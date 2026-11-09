@@ -96,15 +96,16 @@ def test_batch_partial_quota_keeps_first(monkeypatch, db, tmp_path):
     assert db.query(UploadEvent).filter(UploadEvent.kind == "image").count() == 1
 
 
-def test_batch_without_vision_returns_empty_text(monkeypatch, db, tmp_path):
+def test_batch_without_vision_returns_error(monkeypatch, db, tmp_path):
     _use_tmp_uploads(monkeypatch, tmp_path)
     monkeypatch.setattr(uploads_api, "vision_enabled", lambda: False)
 
     result = asyncio.run(upload_images([_file()], db.get(User, 3), db))
 
     assert result["vision_enabled"] is False
-    assert result["items"][0]["text"] == ""
-    assert result["items"][0]["error"] is None
+    assert result["items"][0]["path"] == ""
+    assert "识图服务未配置" in result["items"][0]["error"]
+    assert db.query(UploadEvent).filter(UploadEvent.kind == "image").count() == 0
 
 
 def test_vision_prompt_treats_image_as_untrusted():

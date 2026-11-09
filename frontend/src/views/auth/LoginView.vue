@@ -68,11 +68,9 @@
               <el-form-item prop="password" label="密码">
                 <el-input v-model="regForm.password" type="password" placeholder="至少 6 位" size="large" :prefix-icon="Lock" show-password />
               </el-form-item>
-              <el-form-item prop="role" label="身份">
-                <el-radio-group v-model="regForm.role" size="large" class="auth__role">
-                  <el-radio-button value="teacher">教师</el-radio-button>
-                  <el-radio-button value="student">学生</el-radio-button>
-                </el-radio-group>
+              <el-form-item label="身份">
+                <el-tag type="info" size="large">学生账号</el-tag>
+                <p class="auth__role-tip">教师账号需由管理员开通</p>
               </el-form-item>
               <el-button type="primary" size="large" class="auth__submit" :loading="loading" @click="doRegister">
                 注 册
@@ -97,7 +95,8 @@ const router = useRouter()
 const userStore = useUserStore()
 
 // 首页双入口通过 query 预选身份与页签：?role=teacher&mode=register
-const initialRole = route.query.role === 'teacher' ? 'teacher' : 'student'
+// 公开注册仅开放学生;教师账号需管理员开通
+const initialRole = 'student'
 const tab = ref(route.query.mode === 'register' ? 'register' : 'login')
 const loading = ref(false)
 const loginError = ref('')
@@ -361,6 +360,11 @@ async function doRegister() {
 .auth__error :deep(.el-alert__title) {
   font-size: var(--fs-sm);
   line-height: 1.6;
+}
+.auth__role-tip {
+  margin-top: 4px;
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
 }
 .auth__tabs :deep(.el-form-item__label) {
   font-size: var(--fs-xs);

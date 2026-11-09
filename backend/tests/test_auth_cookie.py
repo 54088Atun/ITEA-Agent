@@ -72,6 +72,20 @@ def test_register_sets_auth_cookie(db):
     assert AUTH_COOKIE in response.headers.get("set-cookie", "")
 
 
+def test_register_rejects_teacher_self_signup(db):
+    response = Response()
+    with pytest.raises(HTTPException) as exc:
+        register(
+            RegisterRequest(
+                email="teacher2@example.com", password=PASSWORD,
+                name="张老师", role="teacher",
+            ),
+            response, db,
+        )
+    assert exc.value.status_code == 403
+    assert "管理员开通" in exc.value.detail
+
+
 def test_logout_clears_auth_cookie():
     response = Response()
     assert logout(response) == {"ok": True}

@@ -286,15 +286,17 @@
           <span v-if="recording" class="chat__recording">录音中 {{ recordingSeconds }}s</span>
           <el-button
             text :loading="uploadingAudio"
-            :title="recording ? '结束录音并转写' : '语音输入'"
+            :title="recording ? '结束录音并转写' : (features.asr_ready ? '语音输入' : '语音识别未配置，请使用文字输入')"
             :aria-label="recording ? '结束录音并转写' : '语音输入'"
-            :disabled="streaming || interviewExpired" @click="toggleRecording"
+            :disabled="streaming || interviewExpired || !features.asr_ready" @click="toggleRecording"
           >
             <el-icon :class="{ 'is-recording': recording }"><Microphone /></el-icon>
           </el-button>
           <el-button
-            text :loading="uploadingImage" title="上传图片识题" aria-label="上传图片识题"
-            :disabled="streaming || interviewExpired" @click="pickImage"
+            text :loading="uploadingImage"
+            :title="features.vision_ready ? '上传图片识题' : '识图未配置，请直接输入题目文字'"
+            aria-label="上传图片识题"
+            :disabled="streaming || interviewExpired || !features.vision_ready" @click="pickImage"
           >
             <el-icon><Picture /></el-icon>
           </el-button>
@@ -307,8 +309,10 @@
             @change="onImageChange"
           />
           <el-button
-            text :loading="uploadingImage" title="拍照上传" aria-label="拍照上传"
-            :disabled="streaming || interviewExpired" @click="pickCameraImage"
+            text :loading="uploadingImage"
+            :title="features.vision_ready ? '拍照上传' : '识图未配置，请直接输入题目文字'"
+            aria-label="拍照上传"
+            :disabled="streaming || interviewExpired || !features.vision_ready" @click="pickCameraImage"
           >
             <el-icon><Camera /></el-icon>
           </el-button>
@@ -469,6 +473,7 @@ import { chatApi } from '../api/chat'
 import { agentApi } from '../api/agent'
 import { adminApi } from '../api/admin'
 import { uploadApi } from '../api/uploads'
+import { features, loadFeatures } from '../stores/features'
 import DebouncedInput from './DebouncedInput.vue'
 
 const props = defineProps({
@@ -880,11 +885,19 @@ function startInterviewTimer() {
 
 function pickImage() {
   if (streaming.value || uploadingImage.value || interviewExpired.value) return
+  if (!features.vision_ready) {
+    ElMessage.warning('识图服务未配置，请直接输入题目文字')
+    return
+  }
   imageInput.value?.click()
 }
 
 function pickCameraImage() {
   if (streaming.value || uploadingImage.value || interviewExpired.value) return
+  if (!features.vision_ready) {
+    ElMessage.warning('识图服务未配置，请直接输入题目文字')
+    return
+  }
   cameraInput.value?.click()
 }
 
@@ -953,6 +966,10 @@ function onPaste(event) {
 
 async function addImageFiles(files) {
   if (!files.length || interviewExpired.value) return
+  if (!features.vision_ready) {
+    ElMessage.warning('识图服务未配置，请直接输入题目文字')
+    return
+  }
 
   const room = MAX_IMAGES - pendingImages.value.length
   if (room <= 0) {
@@ -971,6 +988,10 @@ async function addImageFiles(files) {
       prepared.push(await compressImage(file))
     }
     const data = await uploadApi.images(prepared)
+    if (!data.vision_enabled) {
+      ElMessage.warning('识图服务未配置，图片未加入待发送列表，请直接输入题目文字')
+      return
+    }
     const items = data.items || []
     items.forEach((item, idx) => {
       if (item.path) {
@@ -980,15 +1001,12 @@ async function addImageFiles(files) {
           size: selected[idx]?.size || 0,
           text: item.text || '',
           description: item.description || '',
-          visionEnabled: !!data.vision_enabled,
+          visionEnabled: true,
           error: item.error || '',
         })
       }
       if (item.error) ElMessage.warning(item.error)
     })
-    if (!data.vision_enabled) {
-      ElMessage.info('当前未启用识图，图片将随消息发送，请补充文字描述')
-    }
   } catch { /* 拦截器已提示 */ } finally {
     uploadingImage.value = false
   }
@@ -998,6 +1016,10 @@ async function addImageFiles(files) {
 
 async function toggleRecording() {
   if (uploadingAudio.value || streaming.value || interviewExpired.value) return
+  if (!features.asr_ready) {
+    ElMessage.warning('语音识别未配置，请使用文字输入')
+    return
+  }
   if (recording.value) {
     stopRecording()
     return
@@ -1758,6 +1780,7 @@ function attachStream(assistantMsg, url, body) {
 defineExpose({ ask: quickSend })
 
 onMounted(() => {
+  if (!features.loaded) loadFeatures()
   startInterviewTimer()
   loadConversations()
   // 面试实训等场景:进入即由后端结构化入口开启首轮流式输出
